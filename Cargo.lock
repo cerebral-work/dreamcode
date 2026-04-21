@@ -389,6 +389,7 @@ dependencies = [
  "remote_connection",
  "remote_server",
  "reqwest_client",
+ "reverie_agent",
  "rope",
  "rules_library",
  "schemars",

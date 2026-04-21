@@ -276,6 +276,8 @@ pub enum Agent {
     #[default]
     #[serde(alias = "NativeAgent", alias = "TextThread")]
     NativeAgent,
+    #[serde(alias = "Reverie", alias = "reverie")]
+    ReverieAgent,
     #[serde(alias = "Custom")]
     Custom {
         #[serde(rename = "name")]
@@ -289,6 +291,8 @@ impl From<AgentId> for Agent {
     fn from(id: AgentId) -> Self {
         if id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
             Self::NativeAgent
+        } else if id.as_ref() == reverie_agent::REVERIE_AGENT_ID.as_ref() {
+            Self::ReverieAgent
         } else {
             Self::Custom { id }
         }
@@ -299,6 +303,7 @@ impl Agent {
     pub fn id(&self) -> AgentId {
         match self {
             Self::NativeAgent => agent::ZED_AGENT_ID.clone(),
+            Self::ReverieAgent => reverie_agent::REVERIE_AGENT_ID.clone(),
             Self::Custom { id } => id.clone(),
             #[cfg(any(test, feature = "test-support"))]
             Self::Stub => "stub".into(),
@@ -312,6 +317,7 @@ impl Agent {
     pub fn label(&self) -> SharedString {
         match self {
             Self::NativeAgent => "Zed Agent".into(),
+            Self::ReverieAgent => "Reverie".into(),
             Self::Custom { id, .. } => id.0.clone(),
             #[cfg(any(test, feature = "test-support"))]
             Self::Stub => "Stub Agent".into(),
@@ -321,6 +327,7 @@ impl Agent {
     pub fn icon(&self) -> Option<IconName> {
         match self {
             Self::NativeAgent => None,
+            Self::ReverieAgent => Some(IconName::ZedAgent),
             Self::Custom { .. } => Some(IconName::Sparkle),
             #[cfg(any(test, feature = "test-support"))]
             Self::Stub => None,
@@ -334,6 +341,7 @@ impl Agent {
     ) -> Rc<dyn agent_servers::AgentServer> {
         match self {
             Self::NativeAgent => Rc::new(agent::NativeAgentServer::new(fs, thread_store)),
+            Self::ReverieAgent => Rc::new(reverie_agent::ReverieAgentServer::new()),
             Self::Custom { id: name } => {
                 Rc::new(agent_servers::CustomAgentServer::new(name.clone()))
             }

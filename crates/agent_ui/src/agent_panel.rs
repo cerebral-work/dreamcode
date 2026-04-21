@@ -1556,6 +1556,8 @@ impl AgentPanel {
     fn has_history_for_selected_agent(&self, cx: &App) -> bool {
         match &self.selected_agent {
             Agent::NativeAgent => true,
+            // Reverie runs one ephemeral planner per prompt; no history yet.
+            Agent::ReverieAgent => false,
             Agent::Custom { .. } => self
                 .connection_store
                 .read(cx)
