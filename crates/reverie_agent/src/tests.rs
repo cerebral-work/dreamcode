@@ -359,6 +359,53 @@ mod session_slot_tests {
     }
 }
 
+mod augment_tests {
+    use crate::augment::augment_prompt_blocks;
+    use crate::http::SmartContext;
+    use agent_client_protocol as acp;
+
+    fn text_block(s: &str) -> acp::ContentBlock {
+        acp::ContentBlock::Text(acp::TextContent::new(s.to_string()))
+    }
+
+    fn block_text(b: &acp::ContentBlock) -> Option<String> {
+        match b {
+            acp::ContentBlock::Text(t) => Some(t.text.to_string()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn augment_prompt_blocks_prepends_memory_when_present() {
+        let blocks = vec![text_block("hello")];
+        let memory = Some(SmartContext { content: "- item 1".into() });
+        let out = augment_prompt_blocks(blocks, memory);
+        assert_eq!(out.len(), 2);
+        assert_eq!(
+            block_text(&out[0]).unwrap(),
+            "Relevant memory:\n- item 1\n"
+        );
+        assert_eq!(block_text(&out[1]).unwrap(), "hello");
+    }
+
+    #[test]
+    fn augment_prompt_blocks_passes_through_on_no_memory() {
+        let blocks = vec![text_block("hello")];
+        let out = augment_prompt_blocks(blocks, None);
+        assert_eq!(out.len(), 1);
+        assert_eq!(block_text(&out[0]).unwrap(), "hello");
+    }
+
+    #[test]
+    fn augment_prompt_blocks_skips_empty_memory() {
+        let blocks = vec![text_block("hello")];
+        let memory = Some(SmartContext { content: "   \n".into() });
+        let out = augment_prompt_blocks(blocks, memory);
+        assert_eq!(out.len(), 1, "whitespace-only memory should be skipped");
+        assert_eq!(block_text(&out[0]).unwrap(), "hello");
+    }
+}
+
 mod cancel_race_tests {
     use crate::connection::race_with_cancel;
 

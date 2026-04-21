@@ -4,6 +4,7 @@
 //! no subprocess; the planner loop runs on a dedicated OS thread and
 //! emits session updates back to the GPUI foreground via a channel.
 
+mod augment;
 mod backend;
 mod connection;
 mod http;
