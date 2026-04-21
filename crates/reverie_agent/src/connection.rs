@@ -10,7 +10,7 @@ use language_model::{
 };
 use parking_lot::Mutex;
 use project::{AgentId, Project};
-use reverie_deepagent::{DeepAgent, Run};
+use reverie_deepagent::{Run, SpawnConfig, run_planner_with_observer};
 use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -18,6 +18,7 @@ use std::sync::atomic::AtomicBool;
 use util::path_list::PathList;
 
 use crate::backend::{self, LlmCallRequest, ZedLlmBackend};
+use crate::observer::ChannelObserver;
 use crate::server::REVERIE_AGENT_ID;
 
 const DEFAULT_MAX_ITERATIONS: u32 = 32;
@@ -123,6 +124,7 @@ impl AgentConnection for ReverieAgentConnection {
 
         cx.spawn(async move |cx| {
             let (req_tx, req_rx) = smol::channel::unbounded::<LlmCallRequest>();
+            let (event_tx, event_rx) = smol::channel::unbounded::<acp::SessionUpdate>();
 
             let cancel_for_planner = cancel.clone();
             let user_text_for_planner = user_text.clone();
@@ -130,20 +132,46 @@ impl AgentConnection for ReverieAgentConnection {
                 let mut backend = ZedLlmBackend::new(req_tx);
                 // The user's prompt is bolted onto the system transcript as an
                 // extra user turn so the model sees intent on iteration 1.
-                // `Run::new_default` creates a fresh scratch dir per prompt —
+                // Run::new_default creates a fresh scratch dir per prompt —
                 // Phase 1 has no cross-prompt persistence.
                 backend.seed_user_message(&user_text_for_planner);
-                let _ = cancel_for_planner; // Task 8 wires this to PlannerObserver::should_stop
 
-                let run = Run::new_default()
-                    .map_err(|e| anyhow!("vfs init failed: {e}"))?;
-                let deep = DeepAgent::new(run, DEFAULT_MAX_ITERATIONS);
-                Ok(deep.execute(&mut backend))
+                let observer = ChannelObserver::new(event_tx, cancel_for_planner);
+                let run =
+                    Run::new_default().map_err(|e| anyhow!("vfs init failed: {e}"))?;
+                Ok(run_planner_with_observer(
+                    &run,
+                    &mut backend,
+                    DEFAULT_MAX_ITERATIONS,
+                    &SpawnConfig::default(),
+                    &observer,
+                ))
+            });
+
+            // Pump observer events into the AcpThread concurrently so they
+            // ship while the main loop is awaiting a stream_completion_text
+            // response. The task ends naturally when the planner drops the
+            // observer (and therefore its event_tx) on termination.
+            let event_drain_thread = thread_weak.clone();
+            let event_drain = cx.spawn(async move |cx| {
+                while let Ok(update) = event_rx.recv().await {
+                    if event_drain_thread
+                        .update(cx, |thread, cx| {
+                            if let Err(e) = thread.handle_session_update(update, cx) {
+                                log::debug!("reverie: observer update rejected: {e}");
+                            }
+                        })
+                        .is_err()
+                    {
+                        log::debug!("reverie: session thread dropped, halting event drain");
+                        break;
+                    }
+                }
             });
 
             while let Ok(req) = req_rx.recv().await {
                 let request = build_language_model_request(req.messages);
-                let text_result = stream_to_string(&model, request, &cx).await;
+                let text_result = stream_to_string(&model, request, cx).await;
                 let reply_payload = match text_result {
                     Ok(text) => Ok(text),
                     Err(e) => Err(e.to_string()),
@@ -158,6 +186,10 @@ impl AgentConnection for ReverieAgentConnection {
             let planner_result = planner_task
                 .await
                 .context("reverie planner thread failed")?;
+
+            // Wait for any remaining observer events to flush before the
+            // final summary so UI ordering matches planner ordering.
+            event_drain.await;
 
             let summary = format!(
                 "planner terminated: {:?} (iterations={}, todos_pending={}, spawns={})",
