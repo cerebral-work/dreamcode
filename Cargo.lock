@@ -14786,6 +14786,7 @@ name = "reverie_agent"
 version = "0.1.0"
 dependencies = [
  "acp_thread",
+ "action_log",
  "agent-client-protocol",
  "agent_servers",
  "anyhow",
@@ -14802,8 +14803,10 @@ dependencies = [
  "serde_json",
  "settings",
  "smol",
+ "tempfile",
  "ui",
  "util",
+ "uuid",
  "watch",
 ]
 
