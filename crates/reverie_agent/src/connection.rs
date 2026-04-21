@@ -232,7 +232,7 @@ impl AgentConnection for ReverieAgentConnection {
             );
 
             let summary_chunk = acp::ContentChunk::new(acp::ContentBlock::Text(
-                acp::TextContent::new(summary),
+                acp::TextContent::new(summary.clone()),
             ));
             let update_result = thread_weak.update(cx, |thread, cx| {
                 if let Err(e) = thread.handle_session_update(
@@ -244,6 +244,25 @@ impl AgentConnection for ReverieAgentConnection {
             });
             if update_result.is_err() {
                 log::debug!("reverie: session thread dropped before final summary");
+            }
+
+            // Auto-save on clean terminations only. Fire-and-forget — save_passive
+            // never propagates errors, so let-underscore is correct here.
+            if matches!(
+                planner_result.termination,
+                reverie_deepagent::TerminationReason::Completed
+            ) {
+                let session_id_str = session_id.0.as_ref().to_string();
+                let _ = http_client
+                    .save_passive(
+                        &session_id_str,
+                        &original_prompt,
+                        "zed-agent-user-intent",
+                    )
+                    .await;
+                let _ = http_client
+                    .save_passive(&session_id_str, &summary, "zed-agent-run-summary")
+                    .await;
             }
 
             Ok(acp::PromptResponse::new(acp::StopReason::EndTurn))
