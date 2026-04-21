@@ -241,3 +241,163 @@ fn user_text_from_prompt(blocks: &[acp::ContentBlock]) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+pub struct ReverieAugmentedAgentServer {
+    inner: Box<dyn agent_servers::AgentServer>,
+    http_client: Arc<ReverieHttpClient>,
+}
+
+impl ReverieAugmentedAgentServer {
+    pub fn new(
+        inner: Box<dyn agent_servers::AgentServer>,
+        http_client: Arc<ReverieHttpClient>,
+    ) -> Self {
+        Self { inner, http_client }
+    }
+}
+
+impl agent_servers::AgentServer for ReverieAugmentedAgentServer {
+    fn agent_id(&self) -> AgentId {
+        self.inner.agent_id()
+    }
+
+    fn logo(&self) -> ui::IconName {
+        self.inner.logo()
+    }
+
+    fn connect(
+        &self,
+        delegate: agent_servers::AgentServerDelegate,
+        project: Entity<Project>,
+        cx: &mut App,
+    ) -> Task<Result<Rc<dyn AgentConnection>>> {
+        let http = self.http_client.clone();
+        let inner_task = self.inner.connect(delegate, project, cx);
+        cx.spawn(async move |_cx| {
+            let inner_conn = inner_task.await?;
+            let wrapped: Rc<dyn AgentConnection> =
+                Rc::new(ReverieAugmentedConnection::new(inner_conn, http));
+            Ok(wrapped)
+        })
+    }
+
+    fn default_mode(&self, cx: &App) -> Option<acp::SessionModeId> {
+        self.inner.default_mode(cx)
+    }
+
+    fn set_default_mode(
+        &self,
+        mode_id: Option<acp::SessionModeId>,
+        fs: Arc<dyn fs::Fs>,
+        cx: &mut App,
+    ) {
+        self.inner.set_default_mode(mode_id, fs, cx)
+    }
+
+    fn default_model(&self, cx: &App) -> Option<acp::ModelId> {
+        self.inner.default_model(cx)
+    }
+
+    fn set_default_model(
+        &self,
+        model_id: Option<acp::ModelId>,
+        fs: Arc<dyn fs::Fs>,
+        cx: &mut App,
+    ) {
+        self.inner.set_default_model(model_id, fs, cx)
+    }
+
+    fn favorite_model_ids(&self, cx: &mut App) -> collections::HashSet<acp::ModelId> {
+        self.inner.favorite_model_ids(cx)
+    }
+
+    fn default_config_option(&self, config_id: &str, cx: &App) -> Option<String> {
+        self.inner.default_config_option(config_id, cx)
+    }
+
+    fn set_default_config_option(
+        &self,
+        config_id: &str,
+        value_id: Option<&str>,
+        fs: Arc<dyn fs::Fs>,
+        cx: &mut App,
+    ) {
+        self.inner
+            .set_default_config_option(config_id, value_id, fs, cx)
+    }
+
+    fn favorite_config_option_value_ids(
+        &self,
+        config_id: &acp::SessionConfigId,
+        cx: &mut App,
+    ) -> collections::HashSet<acp::SessionConfigValueId> {
+        self.inner.favorite_config_option_value_ids(config_id, cx)
+    }
+
+    fn toggle_favorite_config_option_value(
+        &self,
+        config_id: acp::SessionConfigId,
+        value_id: acp::SessionConfigValueId,
+        should_be_favorite: bool,
+        fs: Arc<dyn fs::Fs>,
+        cx: &App,
+    ) {
+        self.inner.toggle_favorite_config_option_value(
+            config_id,
+            value_id,
+            should_be_favorite,
+            fs,
+            cx,
+        )
+    }
+
+    fn toggle_favorite_model(
+        &self,
+        model_id: acp::ModelId,
+        should_be_favorite: bool,
+        fs: Arc<dyn fs::Fs>,
+        cx: &App,
+    ) {
+        self.inner
+            .toggle_favorite_model(model_id, should_be_favorite, fs, cx)
+    }
+
+    fn into_any(self: Rc<Self>) -> Rc<dyn Any> {
+        self
+    }
+}
+
+/// Wrap `inner` in a `ReverieAugmentedAgentServer` that injects reverie
+/// memory into every prompt() call routed through the inner server's
+/// connection. Returns `None` if `inner` IS the Reverie agent itself (to
+/// avoid double-retrieval with its in-process memory path) or if
+/// http_client construction fails; callers fall back to the un-wrapped
+/// inner in those cases.
+pub fn augment_with_memory(
+    inner: Box<dyn agent_servers::AgentServer>,
+    project: &Entity<Project>,
+    cx: &App,
+) -> Option<Rc<dyn agent_servers::AgentServer>> {
+    if inner.agent_id() == *crate::REVERIE_AGENT_ID {
+        return None;
+    }
+    let base_url = std::env::var("REVERIE_URL").ok();
+    let project_name = resolve_project_name_for_augment(project, cx);
+    let http_client_arc: Arc<dyn http_client::HttpClient> =
+        project.read(cx).client().http_client();
+    let http_client = ReverieHttpClient::new(base_url, project_name, http_client_arc);
+    Some(Rc::new(ReverieAugmentedAgentServer::new(inner, http_client))
+        as Rc<dyn agent_servers::AgentServer>)
+}
+
+fn resolve_project_name_for_augment(project: &Entity<Project>, cx: &App) -> String {
+    if let Ok(from_env) = std::env::var("REVERIE_PROJECT") {
+        return from_env;
+    }
+    project
+        .read(cx)
+        .visible_worktrees(cx)
+        .next()
+        .map(|wt| wt.read(cx).root_name().as_unix_str().to_string())
+        .unwrap_or_else(|| "unknown-project".to_string())
+}

@@ -14,5 +14,6 @@ mod server;
 #[cfg(test)]
 mod tests;
 
+pub use augment::augment_with_memory;
 pub use http::ReverieHttpClient;
 pub use server::{REVERIE_AGENT_ID, ReverieAgentServer};
