@@ -91,6 +91,8 @@ The panel renders planner steps as inline chunks:
 - `[note] ...`, `[give_up]`, `[noop]` — planner control signals
 - Final line: `planner terminated: <reason> (iterations=N, todos_pending=K, spawns=M)`
 
+When the planner spawns a subagent, the child's planner steps appear inline in the same chat — interleaved between the `[spawn]` breadcrumb and the `[subagent … Success]` terminal chunk. Parallel siblings' events interleave nondeterministically with each other; the `[spawn]` / `[subagent]` brackets still identify each block's persona.
+
 ## Settings
 
 Reverie uses no custom settings beyond the shared `agent_servers` block. It accepts the same defaults other agents do and does not need API key plumbing — it reuses the language model you've already configured in Zed.
@@ -118,7 +120,7 @@ The cancel notifier is installed only for the top-level prompt's foreground driv
 ## Known limitations
 
 - **Session state is in-memory only.** See "Persistent session state" above for what carries across prompts (TodoList + Vfs) and what doesn't (LLM transcript, cross-restart state).
-- **No live streaming within subagents.** The observer only fires on the top-level planner loop; nested subagent planners run to completion before their `SpawnObservation` ships.
+- **Subagent events interleave with parent events chronologically.** There's no UI grouping or indentation — a subagent's `[add_todo]` chunk appears in the same flat chat as the parent's. The `[spawn] <persona> :: <task>` breadcrumb before and `[subagent <persona>] <Status>: <summary>` after bracket each child's block for visual context.
 - **Cancel interrupts the top-level run but not nested subagent streams.** Subagent LLM calls finish their current chunk before noticing cancellation. See "Canceling a run" above.
 - **Retrieval is once-per-prompt, not per-iteration.** Memory is consulted at prompt start only. A future phase may add per-iteration or per-spawn retrieval.
 - **No memory available to non-Reverie agents.** Claude / Gemini / Zed-native agents see no memory. Phase 1.5b (a universal `ReverieAugmentedConnection` wrapper) addresses this.
