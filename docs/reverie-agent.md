@@ -22,6 +22,43 @@ The Reverie agent runs [reverie-deepagent](https://github.com/cerebral-work/reve
 2. Pick **Reverie** from the agent selector.
 3. Type a prompt. The planner will break it into todos, optionally write to a scratch vfs, and possibly spawn subagents. Each step appears live in the chat as an `AgentMessageChunk`.
 
+## Memory (auto-retrieval)
+
+When the reverie daemon is running on `localhost:7437`, the Reverie agent automatically:
+
+1. **Before each prompt** — calls `GET /context/smart?q=<your prompt>&project=<project name>` with a 5s timeout. If the daemon returns relevant context, it's prepended to the prompt as `Relevant memory:\n<block>\n\n<your prompt>` and the agent panel shows a one-line breadcrumb: `[memory] consulted reverie (project=<name>)`.
+2. **After each Completed run** — fires two fire-and-forget POSTs to `/observations/passive`:
+   - `{ session_id, content: <your prompt>, project, source: "zed-agent-user-intent" }`
+   - `{ session_id, content: <run summary>, project, source: "zed-agent-run-summary" }`
+
+Non-Completed runs (MaxIterations, GaveUp, Backend error, EmptyCompletion, Cancelled) do NOT save — only clean terminations contribute to the corpus.
+
+### Disabling
+
+Memory integration has no explicit on/off switch; instead, it degrades silently when reverie is unreachable. To disable, point `REVERIE_URL` at a closed port:
+
+```json
+{
+  "agent_servers": {
+    "reverie": {
+      "env": {
+        "REVERIE_URL": "http://127.0.0.1:1"
+      }
+    }
+  }
+}
+```
+
+The first failed call per session logs `"reverie daemon unreachable at <url>, continuing without memory..."` at info level; subsequent failures log at debug only.
+
+### Project name
+
+Retrieval and save payloads are scoped to a project. Resolution order:
+1. `agent_servers.reverie.env.REVERIE_PROJECT` in `settings.json`.
+2. Shell env `REVERIE_PROJECT`.
+3. First visible worktree's root directory name.
+4. Literal `"unknown-project"` if no worktree is open.
+
 ## What you'll see
 
 The panel renders planner steps as inline chunks:
@@ -53,12 +90,14 @@ To select Reverie as your default:
 
 Clicking **Stop** in the agent panel flips a per-session `AtomicBool` that the planner checks at the top of every iteration. The run terminates with `TerminationReason::Cancelled` on the next loop top. In-flight LLM calls continue until their `stream_completion_text` future resolves; cancellation granularity is per-iteration, not mid-call.
 
-## Known Phase 1 limitations
+## Known limitations
 
 - **No persistence between prompts.** Each prompt builds a fresh `Run` with an empty todo list and empty scratch vfs.
 - **No live streaming within subagents.** The observer only fires on the top-level planner loop; nested subagent planners run to completion before their `SpawnObservation` ships.
 - **Cancel is coarse.** It stops the *next* iteration, not the in-flight LLM call.
-- **No memory integration yet.** The reverie daemon's `/search/v2`, `/context/smart`, and `/observations` endpoints are not queried from Zed in Phase 1 — a separate MCP context-server (Phase 0 of the broader plan) is the intended integration for memory retrieval.
+- **Retrieval is once-per-prompt, not per-iteration.** Memory is consulted at prompt start only. A future phase may add per-iteration or per-spawn retrieval.
+- **No memory available to non-Reverie agents.** Claude / Gemini / Zed-native agents see no memory. Phase 1.5b (a universal `ReverieAugmentedConnection` wrapper) addresses this.
+- **No explicit opt-out UI.** Disable by pointing `REVERIE_URL` at a closed port (see Memory section).
 - **No subagent runtime isolation.** Subagents share Zed's language-model handle; if the model you picked rate-limits, all nested planners hit the same ceiling.
 
 ## Architecture at a glance
