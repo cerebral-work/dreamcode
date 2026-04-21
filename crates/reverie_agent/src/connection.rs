@@ -110,7 +110,7 @@ impl AgentConnection for ReverieAgentConnection {
         cx: &mut App,
     ) -> Task<Result<acp::PromptResponse>> {
         let session_id = params.session_id.clone();
-        let user_text = user_text_from_prompt(&params.prompt);
+        let mut user_text = user_text_from_prompt(&params.prompt);
 
         let (thread_weak, cancel) = {
             let sessions = self.sessions.lock();
@@ -126,8 +126,35 @@ impl AgentConnection for ReverieAgentConnection {
         };
 
         let model = self.model.clone();
+        let http_client = self.http_client.clone();
 
         cx.spawn(async move |cx| {
+            // Memory retrieval: prepend context from reverie before the planner
+            // starts. Failures degrade silently (Ok(None) from smart_context).
+            let memory = http_client
+                .smart_context(&user_text)
+                .await
+                .unwrap_or(None);
+            let original_prompt = user_text.clone();
+            if let Some(ctx) = &memory {
+                let breadcrumb = format!(
+                    "[memory] consulted reverie (project={})",
+                    http_client.project()
+                );
+                let chunk = acp::ContentChunk::new(acp::ContentBlock::Text(
+                    acp::TextContent::new(breadcrumb),
+                ));
+                let _ = thread_weak.update(cx, |thread, cx| {
+                    if let Err(e) = thread.handle_session_update(
+                        acp::SessionUpdate::AgentMessageChunk(chunk),
+                        cx,
+                    ) {
+                        log::debug!("reverie: memory breadcrumb rejected: {e}");
+                    }
+                });
+                user_text = format!("Relevant memory:\n{}\n\n{}", ctx.content, user_text);
+            }
+
             let (req_tx, req_rx) = smol::channel::unbounded::<LlmCallRequest>();
             let (event_tx, event_rx) = smol::channel::unbounded::<acp::SessionUpdate>();
 
