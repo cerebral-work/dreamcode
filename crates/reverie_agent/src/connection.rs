@@ -27,6 +27,11 @@ struct Session {
     thread: WeakEntity<AcpThread>,
     cancel: Arc<AtomicBool>,
     state: Arc<Mutex<SessionState>>,
+    // Phase 1.5d: holds the current (or most recent) prompt's cancel
+    // notifier. cancel() fires try_send(()) on it so any pending await
+    // in the foreground driver wakes immediately instead of after the
+    // current LLM chunk resolves.
+    cancel_notify: Arc<Mutex<Option<smol::channel::Sender<()>>>>,
 }
 
 pub(crate) struct SessionState {
@@ -175,6 +180,7 @@ impl AgentConnection for ReverieAgentConnection {
                 thread: thread.downgrade(),
                 cancel: Arc::new(AtomicBool::new(false)),
                 state: session_state,
+                cancel_notify: Arc::new(Mutex::new(None)),
             },
         );
         Task::ready(Ok(thread))
@@ -189,10 +195,15 @@ impl AgentConnection for ReverieAgentConnection {
         let session_id = params.session_id.clone();
         let mut user_text = user_text_from_prompt(&params.prompt);
 
-        let (thread_weak, cancel, state) = {
+        let (thread_weak, cancel, state, cancel_notify) = {
             let sessions = self.sessions.lock();
             match sessions.get(&session_id) {
-                Some(s) => (s.thread.clone(), s.cancel.clone(), s.state.clone()),
+                Some(s) => (
+                    s.thread.clone(),
+                    s.cancel.clone(),
+                    s.state.clone(),
+                    s.cancel_notify.clone(),
+                ),
                 None => {
                     return Task::ready(Err(anyhow!(
                         "unknown session {:?}",
@@ -201,6 +212,18 @@ impl AgentConnection for ReverieAgentConnection {
                 }
             }
         };
+
+        // Phase 1.5d: install a fresh cancel channel for this prompt. Order:
+        // 1. Install cancel_tx into session (cancel() can now reach it).
+        // 2. Clear the AtomicBool so a cancel from the PRIOR prompt doesn't
+        //    immediately kill this new run.
+        // A cancel arriving between (1) and (2) lands on the new cancel_rx
+        // (correct — we'll honour it). A cancel arriving BEFORE (1) is lost
+        // unless it flipped the bool, in which case (2) wipes it — this is
+        // a known sub-millisecond race documented in the Phase 1.5d spec.
+        let (cancel_tx, cancel_rx) = smol::channel::bounded::<()>(1);
+        *cancel_notify.lock() = Some(cancel_tx);
+        cancel.store(false, std::sync::atomic::Ordering::SeqCst);
 
         let (run_for_planner, initial_todos, run_slot_guard) =
             match acquire_run_slot(&state) {
@@ -290,14 +313,10 @@ impl AgentConnection for ReverieAgentConnection {
                 }
             });
 
-            // Temporary shim: Task 4 replaces this never-firing cancel_rx
-            // with the session's real per-prompt channel.
-            let (_never_tx, never_rx) = smol::channel::bounded::<()>(1);
-
             while let Ok(req) = req_rx.recv().await {
                 let request = build_language_model_request(req.messages);
                 let text_result =
-                    stream_to_string_cancellable(&model, request, cx, &never_rx).await;
+                    stream_to_string_cancellable(&model, request, cx, &cancel_rx).await;
                 let reply_payload = match text_result {
                     Ok(text) => Ok(text),
                     Err(e) => Err(e.to_string()),
@@ -376,6 +395,11 @@ impl AgentConnection for ReverieAgentConnection {
             session
                 .cancel
                 .store(true, std::sync::atomic::Ordering::SeqCst);
+            if let Some(tx) = session.cancel_notify.lock().as_ref() {
+                // Full → cancel already pending; Closed → driver already
+                // torn down. Both are safe no-ops.
+                let _ = tx.try_send(());
+            }
         }
     }
 
