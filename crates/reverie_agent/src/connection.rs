@@ -379,6 +379,25 @@ impl AgentConnection for ReverieAgentConnection {
     }
 }
 
+pub(crate) async fn race_with_cancel<T, F>(
+    work: F,
+    cancel_rx: &smol::channel::Receiver<()>,
+    cancel_err: &'static str,
+) -> Result<T>
+where
+    F: std::future::Future<Output = Result<T>>,
+{
+    use futures::future::Either;
+
+    let work = Box::pin(work);
+    let cancel = Box::pin(cancel_rx.recv());
+    match futures::future::select(work, cancel).await {
+        Either::Left((Ok(t), _)) => Ok(t),
+        Either::Left((Err(e), _)) => Err(e),
+        Either::Right(_) => Err(anyhow!(cancel_err)),
+    }
+}
+
 fn build_persistent_run(
     scratch_root: &std::path::Path,
     session_id: &acp::SessionId,

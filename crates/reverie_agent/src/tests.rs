@@ -358,3 +358,36 @@ mod session_slot_tests {
         );
     }
 }
+
+mod cancel_race_tests {
+    use crate::connection::race_with_cancel;
+
+    #[test]
+    fn race_with_cancel_fires_err_when_cancel_pre_seeded() {
+        let (tx, rx) = smol::channel::bounded::<()>(1);
+        tx.try_send(()).unwrap();
+
+        let result: anyhow::Result<()> = futures::executor::block_on(race_with_cancel(
+            futures::future::pending::<anyhow::Result<()>>(),
+            &rx,
+            "cancelled",
+        ));
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("cancelled"),
+            "expected error message to contain 'cancelled'"
+        );
+    }
+
+    #[test]
+    fn race_with_cancel_lets_work_win_when_no_signal() {
+        let (_tx, rx) = smol::channel::bounded::<()>(1);
+
+        let result: anyhow::Result<u32> = futures::executor::block_on(race_with_cancel(
+            async { Ok(42u32) },
+            &rx,
+            "cancelled",
+        ));
+        assert_eq!(result.unwrap(), 42);
+    }
+}
