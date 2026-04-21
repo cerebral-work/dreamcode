@@ -290,9 +290,14 @@ impl AgentConnection for ReverieAgentConnection {
                 }
             });
 
+            // Temporary shim: Task 4 replaces this never-firing cancel_rx
+            // with the session's real per-prompt channel.
+            let (_never_tx, never_rx) = smol::channel::bounded::<()>(1);
+
             while let Ok(req) = req_rx.recv().await {
                 let request = build_language_model_request(req.messages);
-                let text_result = stream_to_string(&model, request, cx).await;
+                let text_result =
+                    stream_to_string_cancellable(&model, request, cx, &never_rx).await;
                 let reply_payload = match text_result {
                     Ok(text) => Ok(text),
                     Err(e) => Err(e.to_string()),
@@ -445,19 +450,34 @@ fn build_language_model_request(messages: Vec<(backend::Role, String)>) -> Langu
     }
 }
 
-async fn stream_to_string(
+async fn stream_to_string_cancellable(
     model: &Arc<dyn LanguageModel>,
     request: LanguageModelRequest,
     cx: &AsyncApp,
+    cancel_rx: &smol::channel::Receiver<()>,
 ) -> Result<String> {
-    let mut text_stream = model
-        .stream_completion_text(request, cx)
-        .await
-        .map_err(|e| anyhow!("stream_completion_text failed: {e}"))?;
+    let text_stream_fut = async {
+        model
+            .stream_completion_text(request, cx)
+            .await
+            .map_err(|e| anyhow!("stream_completion_text failed: {e}"))
+    };
+    let mut text_stream = race_with_cancel(
+        text_stream_fut,
+        cancel_rx,
+        "cancelled before stream started",
+    )
+    .await?;
+
     let mut text = String::new();
-    while let Some(chunk) = text_stream.stream.next().await {
-        let chunk = chunk.map_err(|e| anyhow!("stream chunk error: {e}"))?;
-        text.push_str(&chunk);
+    loop {
+        let next_fut = async { Ok::<_, anyhow::Error>(text_stream.stream.next().await) };
+        let next = race_with_cancel(next_fut, cancel_rx, "cancelled mid-stream").await?;
+        match next {
+            None => break,
+            Some(Ok(chunk)) => text.push_str(&chunk),
+            Some(Err(e)) => return Err(anyhow!("stream chunk error: {e}")),
+        }
     }
     Ok(text)
 }
