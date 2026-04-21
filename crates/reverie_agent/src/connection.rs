@@ -10,7 +10,7 @@ use language_model::{
 };
 use parking_lot::Mutex;
 use project::{AgentId, Project};
-use reverie_deepagent::{Run, SpawnConfig, run_planner_with_observer};
+use reverie_deepagent::{SpawnConfig, run_planner_with_observer_and_todos};
 use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -189,10 +189,10 @@ impl AgentConnection for ReverieAgentConnection {
         let session_id = params.session_id.clone();
         let mut user_text = user_text_from_prompt(&params.prompt);
 
-        let (thread_weak, cancel) = {
+        let (thread_weak, cancel, state) = {
             let sessions = self.sessions.lock();
             match sessions.get(&session_id) {
-                Some(s) => (s.thread.clone(), s.cancel.clone()),
+                Some(s) => (s.thread.clone(), s.cancel.clone(), s.state.clone()),
                 None => {
                     return Task::ready(Err(anyhow!(
                         "unknown session {:?}",
@@ -202,10 +202,21 @@ impl AgentConnection for ReverieAgentConnection {
             }
         };
 
+        let (run_for_planner, initial_todos, run_slot_guard) =
+            match acquire_run_slot(&state) {
+                Ok(x) => x,
+                Err(e) => return Task::ready(Err(e)),
+            };
+
         let model = self.model.clone();
         let http_client = self.http_client.clone();
 
         cx.spawn(async move |cx| {
+            // Hold the guard alive for the entire prompt task so in_progress
+            // stays true until we're actually done (planner finished, events
+            // drained, summary pushed, saves fired). Drops at closure exit,
+            // including via `?` or panic unwind.
+            let _run_slot_guard = run_slot_guard;
             // Memory retrieval: prepend context from reverie before the planner
             // starts. Failures degrade silently (Ok(None) from smart_context).
             let memory = http_client
@@ -237,23 +248,24 @@ impl AgentConnection for ReverieAgentConnection {
 
             let cancel_for_planner = cancel.clone();
             let user_text_for_planner = user_text.clone();
+            let run_for_closure = run_for_planner.clone();
+            let initial_todos_for_closure = initial_todos;
             let planner_task = smol::unblock(move || -> Result<reverie_deepagent::PlannerResult> {
                 let mut backend = ZedLlmBackend::new(req_tx);
-                // The user's prompt is bolted onto the system transcript as an
-                // extra user turn so the model sees intent on iteration 1.
-                // Run::new_default creates a fresh scratch dir per prompt —
-                // Phase 1 has no cross-prompt persistence.
+                // Shared-workspace persistence: LLM gets a fresh transcript
+                // per prompt, but the Run/Vfs are stable across prompts in
+                // this session and the TodoList seed carries the last run's
+                // final state (Phase 1.5c).
                 backend.seed_user_message(&user_text_for_planner);
 
                 let observer = ChannelObserver::new(event_tx, cancel_for_planner);
-                let run =
-                    Run::new_default().map_err(|e| anyhow!("vfs init failed: {e}"))?;
-                Ok(run_planner_with_observer(
-                    &run,
+                Ok(run_planner_with_observer_and_todos(
+                    &run_for_closure,
                     &mut backend,
                     DEFAULT_MAX_ITERATIONS,
                     &SpawnConfig::default(),
                     &observer,
+                    initial_todos_for_closure,
                 ))
             });
 
@@ -299,6 +311,14 @@ impl AgentConnection for ReverieAgentConnection {
             // Wait for any remaining observer events to flush before the
             // final summary so UI ordering matches planner ordering.
             event_drain.await;
+
+            // Phase 1.5c: carry the planner's final TodoList back to the
+            // session so the next prompt picks up from here. Wholesale
+            // replacement — we don't merge (see §3.6 of the spec).
+            {
+                let mut st = state.lock();
+                st.todos = planner_result.todos.clone();
+            }
 
             let summary = format!(
                 "planner terminated: {:?} (iterations={}, todos_pending={}, spawns={})",
