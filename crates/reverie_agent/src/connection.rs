@@ -31,13 +31,18 @@ struct Session {
 pub struct ReverieAgentConnection {
     model: Arc<dyn LanguageModel>,
     sessions: Arc<Mutex<HashMap<acp::SessionId, Session>>>,
+    http_client: Arc<crate::ReverieHttpClient>,
 }
 
 impl ReverieAgentConnection {
-    pub fn new(model: Arc<dyn LanguageModel>) -> Self {
+    pub fn new(
+        model: Arc<dyn LanguageModel>,
+        http_client: Arc<crate::ReverieHttpClient>,
+    ) -> Self {
         Self {
             model,
             sessions: Arc::new(Mutex::new(HashMap::default())),
+            http_client,
         }
     }
 }

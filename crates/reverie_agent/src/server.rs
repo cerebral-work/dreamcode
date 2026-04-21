@@ -2,6 +2,7 @@ use acp_thread::AgentConnection;
 use agent_servers::{AgentServer, AgentServerDelegate};
 use anyhow::{Context as _, Result};
 use gpui::{App, Entity, Task};
+use http_client::HttpClient;
 use language_model::{LanguageModel, LanguageModelRegistry};
 use project::{AgentId, Project};
 use std::any::Any;
@@ -9,6 +10,7 @@ use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 use ui::IconName;
 
+use crate::ReverieHttpClient;
 use crate::connection::ReverieAgentConnection;
 
 pub static REVERIE_AGENT_ID: LazyLock<AgentId> =
@@ -26,6 +28,22 @@ impl ReverieAgentServer {
             .default_model()
             .map(|m| m.model)
             .context("no default language model configured — pick one in settings before using the Reverie agent")
+    }
+
+    fn resolve_base_url() -> Option<String> {
+        std::env::var("REVERIE_URL").ok()
+    }
+
+    fn resolve_project(project: &Entity<Project>, cx: &App) -> String {
+        if let Ok(from_env) = std::env::var("REVERIE_PROJECT") {
+            return from_env;
+        }
+        project
+            .read(cx)
+            .visible_worktrees(cx)
+            .next()
+            .map(|wt| wt.read(cx).root_name().as_unix_str().to_string())
+            .unwrap_or_else(|| "unknown-project".to_string())
     }
 }
 
@@ -47,14 +65,19 @@ impl AgentServer for ReverieAgentServer {
     fn connect(
         &self,
         _delegate: AgentServerDelegate,
-        _project: Entity<Project>,
+        project: Entity<Project>,
         cx: &mut App,
     ) -> Task<Result<Rc<dyn AgentConnection>>> {
         let model = match Self::default_model(cx) {
             Ok(m) => m,
             Err(e) => return Task::ready(Err(e)),
         };
-        let connection: Rc<dyn AgentConnection> = Rc::new(ReverieAgentConnection::new(model));
+        let base_url = Self::resolve_base_url();
+        let project_name = Self::resolve_project(&project, cx);
+        let http: Arc<dyn HttpClient> = project.read(cx).client().http_client();
+        let http_client = ReverieHttpClient::new(base_url, project_name, http);
+        let connection: Rc<dyn AgentConnection> =
+            Rc::new(ReverieAgentConnection::new(model, http_client));
         Task::ready(Ok(connection))
     }
 
