@@ -107,13 +107,19 @@ To select Reverie as your default:
 
 ## Canceling a run
 
-Clicking **Stop** in the agent panel flips a per-session `AtomicBool` that the planner checks at the top of every iteration. The run terminates with `TerminationReason::Cancelled` on the next loop top. In-flight LLM calls continue until their `stream_completion_text` future resolves; cancellation granularity is per-iteration, not mid-call.
+Clicking **Stop** in the agent panel interrupts the run within milliseconds, including while an LLM call is streaming. Internally: a per-session `AtomicBool` is flipped (so the planner's iteration-top `should_stop` check catches it) AND a per-prompt `smol::channel` notifier fires so any pending await in the foreground driver (the `stream_completion_text` call, or a `stream.next()` chunk await) wakes immediately. The in-flight HTTP request is torn down via async drop; the planner's next call to the backend sees a transport error, and because `should_stop` is true at that moment, the run terminates with `TerminationReason::Cancelled` (not `Backend`).
+
+Partial state is preserved (Phase 1.5c): whatever the `TodoList` had accumulated before cancel stays, and the scratch `Vfs` is untouched. Send a follow-up prompt in the same thread to continue.
+
+### Subagent limit
+
+The cancel notifier is installed only for the top-level prompt's foreground driver. A subagent's own nested LLM calls aren't interrupted mid-stream — the parent-level `should_stop` catches them at the next planner iteration boundary. Deep cancellation through subagents is future work.
 
 ## Known limitations
 
 - **Session state is in-memory only.** See "Persistent session state" above for what carries across prompts (TodoList + Vfs) and what doesn't (LLM transcript, cross-restart state).
 - **No live streaming within subagents.** The observer only fires on the top-level planner loop; nested subagent planners run to completion before their `SpawnObservation` ships.
-- **Cancel is coarse.** It stops the *next* iteration, not the in-flight LLM call.
+- **Cancel interrupts the top-level run but not nested subagent streams.** Subagent LLM calls finish their current chunk before noticing cancellation. See "Canceling a run" above.
 - **Retrieval is once-per-prompt, not per-iteration.** Memory is consulted at prompt start only. A future phase may add per-iteration or per-spawn retrieval.
 - **No memory available to non-Reverie agents.** Claude / Gemini / Zed-native agents see no memory. Phase 1.5b (a universal `ReverieAugmentedConnection` wrapper) addresses this.
 - **No explicit opt-out UI.** Disable by pointing `REVERIE_URL` at a closed port (see Memory section).
