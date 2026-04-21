@@ -1050,7 +1050,7 @@ impl AgentPanel {
             // the inline assistant etc.
             store.request_connection(
                 Agent::NativeAgent,
-                Agent::NativeAgent.server(fs.clone(), thread_store.clone()),
+                Agent::NativeAgent.server(fs.clone(), thread_store.clone(), &project, cx),
                 cx,
             );
             store
@@ -2680,7 +2680,14 @@ impl AgentPanel {
         .detach();
 
         let server = server_override
-            .unwrap_or_else(|| agent.server(self.fs.clone(), self.thread_store.clone()));
+            .unwrap_or_else(|| {
+                agent.server(
+                    self.fs.clone(),
+                    self.thread_store.clone(),
+                    &self.project,
+                    cx,
+                )
+            });
         let thread_store = server
             .clone()
             .downcast::<agent::NativeAgentServer>()

@@ -53,7 +53,7 @@ use language::{
 use language_model::{
     ConfiguredModel, LanguageModelId, LanguageModelProviderId, LanguageModelRegistry,
 };
-use project::{AgentId, DisableAiSettings};
+use project::{AgentId, DisableAiSettings, Project};
 use prompt_store::PromptBuilder;
 use release_channel::ReleaseChannel;
 use schemars::JsonSchema;
@@ -338,6 +338,53 @@ impl Agent {
         &self,
         fs: Arc<dyn fs::Fs>,
         thread_store: Entity<agent::ThreadStore>,
+        project: &Entity<Project>,
+        cx: &App,
+    ) -> Rc<dyn agent_servers::AgentServer> {
+        // Reverie has retrieval in-process; wrapping would double-retrieve.
+        if let Self::ReverieAgent = self {
+            return Rc::new(reverie_agent::ReverieAgentServer::new());
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        if let Self::Stub = self {
+            return Rc::new(crate::test_support::StubAgentServer::default_response());
+        }
+
+        // Build the inner server as Box so it can be moved into the
+        // augment wrapper (Rc<dyn AgentServer> is !Send and the trait
+        // requires Send).
+        let fs_for_inner = fs.clone();
+        let thread_store_for_inner = thread_store.clone();
+        let inner: Box<dyn agent_servers::AgentServer> = match self {
+            Self::NativeAgent => Box::new(agent::NativeAgentServer::new(
+                fs_for_inner,
+                thread_store_for_inner,
+            )),
+            Self::Custom { id: name } => Box::new(agent_servers::CustomAgentServer::new(name.clone())),
+            Self::ReverieAgent => unreachable!("short-circuited above"),
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Stub => unreachable!("short-circuited above"),
+        };
+
+        if augment_disabled_for_agent(self, cx) {
+            return Rc::from(inner);
+        }
+        if let Some(wrapped) = reverie_agent::augment_with_memory(inner, project, cx) {
+            return wrapped;
+        }
+        // augment_with_memory consumed `inner`; rebuild it without
+        // augmentation. Reached only when inner was somehow Reverie,
+        // which we already short-circuited above — treat as unreachable.
+        self.server_without_augment(fs, thread_store)
+    }
+
+    /// Build an AgentServer WITHOUT reverie memory augmentation. Used by
+    /// callers that don't have a project handle in scope (e.g. thread
+    /// import) and as the fallback when augment_with_memory declines.
+    pub fn server_without_augment(
+        &self,
+        fs: Arc<dyn fs::Fs>,
+        thread_store: Entity<agent::ThreadStore>,
     ) -> Rc<dyn agent_servers::AgentServer> {
         match self {
             Self::NativeAgent => Rc::new(agent::NativeAgentServer::new(fs, thread_store)),
@@ -349,6 +396,34 @@ impl Agent {
             Self::Stub => Rc::new(crate::test_support::StubAgentServer::default_response()),
         }
     }
+}
+
+fn augment_disabled_for_agent(agent: &Agent, cx: &App) -> bool {
+    use gpui::AppContext as _;
+    let agent_id = agent.id();
+    let settings = cx.read_global(|settings: &settings::SettingsStore, _| {
+        settings
+            .get::<project::agent_server_store::AllAgentServersSettings>(None)
+            .get(agent_id.as_ref())
+            .cloned()
+    });
+    let Some(settings) = settings else {
+        return false;
+    };
+    // Only Extension and Registry variants carry a top-level env map.
+    // Custom variants route env through a command struct; users who want
+    // to disable augmentation on a Custom agent can set REVERIE_AUGMENT=0
+    // in their shell environment (picked up by std::env::var at connect time
+    // via the ReverieHttpClient resolution path — future work to read from
+    // the Custom command's env if needed).
+    let env = match &settings {
+        project::agent_server_store::CustomAgentServerSettings::Extension { env, .. } => env,
+        project::agent_server_store::CustomAgentServerSettings::Registry { env, .. } => env,
+        project::agent_server_store::CustomAgentServerSettings::Custom { .. } => return false,
+    };
+    env.get("REVERIE_AUGMENT")
+        .map(|v| v == "0")
+        .unwrap_or(false)
 }
 
 /// Content to initialize new external agent with.
