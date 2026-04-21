@@ -112,3 +112,163 @@ fn transport_error_propagates_on_dropped_driver() {
         "expected Transport error when driver is gone"
     );
 }
+
+mod http_tests {
+    use crate::http::ReverieHttpClient;
+    use futures::AsyncReadExt as _;
+    use http_client::{AsyncBody, FakeHttpClient, Method, Response};
+    use std::sync::{Arc as StdArc, Mutex};
+
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        futures::executor::block_on(f)
+    }
+
+    #[test]
+    fn smart_context_parses_response() {
+        let http = FakeHttpClient::create(|req| async move {
+            assert_eq!(req.method(), Method::GET);
+            let uri = req.uri().to_string();
+            assert!(uri.contains("/context/smart"), "{uri}");
+            assert!(uri.contains("q=how+do+I+X"), "{uri}");
+            assert!(uri.contains("project=test-proj"), "{uri}");
+            Ok(Response::builder()
+                .status(200)
+                .body(AsyncBody::from(
+                    r###"{"context":"## Memory\n- item 1\n- item 2\n"}"###.to_string(),
+                ))
+                .unwrap())
+        });
+        let client = ReverieHttpClient::new(
+            Some("http://example.test".to_string()),
+            "test-proj".to_string(),
+            http,
+        );
+        let result = block_on(client.smart_context("how do I X")).unwrap();
+        let ctx = result.expect("should have returned Some");
+        assert!(ctx.content.contains("item 1"));
+        assert!(ctx.content.contains("item 2"));
+    }
+
+    #[test]
+    fn smart_context_returns_none_on_transport_error() {
+        let http = FakeHttpClient::create(|_req| async move {
+            Err(anyhow::anyhow!("connection refused"))
+        });
+        let client = ReverieHttpClient::new(
+            Some("http://example.test".to_string()),
+            "p".to_string(),
+            http,
+        );
+        let result = block_on(client.smart_context("anything")).unwrap();
+        assert!(result.is_none(), "transport error should degrade to None");
+    }
+
+    #[test]
+    fn smart_context_returns_none_on_5xx() {
+        let http = FakeHttpClient::create(|_req| async move {
+            Ok(Response::builder()
+                .status(500)
+                .body(AsyncBody::from(r#"{"error":"boom"}"#.to_string()))
+                .unwrap())
+        });
+        let client = ReverieHttpClient::new(
+            Some("http://example.test".to_string()),
+            "p".to_string(),
+            http,
+        );
+        let result = block_on(client.smart_context("anything")).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn smart_context_returns_none_on_empty_context() {
+        let http = FakeHttpClient::create(|_req| async move {
+            Ok(Response::builder()
+                .status(200)
+                .body(AsyncBody::from(r#"{"context":""}"#.to_string()))
+                .unwrap())
+        });
+        let client = ReverieHttpClient::new(
+            Some("http://example.test".to_string()),
+            "p".to_string(),
+            http,
+        );
+        let result = block_on(client.smart_context("anything")).unwrap();
+        assert!(result.is_none(), "empty context collapses to None");
+    }
+
+    #[test]
+    fn save_passive_serializes_correct_body() {
+        let captured: StdArc<Mutex<Option<String>>> = StdArc::new(Mutex::new(None));
+        let captured_for_handler = captured.clone();
+        let http = FakeHttpClient::create(move |mut req| {
+            let captured_for_handler = captured_for_handler.clone();
+            async move {
+                assert_eq!(req.method(), Method::POST);
+                assert!(req.uri().to_string().contains("/observations/passive"));
+                let mut body = String::new();
+                req.body_mut()
+                    .read_to_string(&mut body)
+                    .await
+                    .unwrap();
+                *captured_for_handler.lock().unwrap() = Some(body);
+                Ok(Response::builder()
+                    .status(200)
+                    .body(AsyncBody::from(r#"{"saved":1}"#.to_string()))
+                    .unwrap())
+            }
+        });
+
+        let client = ReverieHttpClient::new(
+            Some("http://example.test".to_string()),
+            "myproj".to_string(),
+            http,
+        );
+        block_on(client.save_passive(
+            "session-42",
+            "hello world",
+            "zed-agent-user-intent",
+        ))
+        .unwrap();
+
+        let body = captured.lock().unwrap().clone().expect("body captured");
+        assert!(body.contains(r#""session_id":"session-42""#), "{body}");
+        assert!(body.contains(r#""content":"hello world""#), "{body}");
+        assert!(body.contains(r#""project":"myproj""#), "{body}");
+        assert!(body.contains(r#""source":"zed-agent-user-intent""#), "{body}");
+    }
+
+    #[test]
+    fn save_passive_tolerates_transport_error() {
+        let http = FakeHttpClient::create(|_req| async move {
+            Err(anyhow::anyhow!("connection refused"))
+        });
+        let client = ReverieHttpClient::new(
+            Some("http://example.test".to_string()),
+            "p".to_string(),
+            http,
+        );
+        let result = block_on(client.save_passive("s", "c", "x"));
+        assert!(
+            result.is_ok(),
+            "save_passive must never propagate transport errors"
+        );
+    }
+
+    #[test]
+    fn save_passive_tolerates_5xx() {
+        let http = FakeHttpClient::create(|_req| async move {
+            Ok(Response::builder()
+                .status(500)
+                .body(AsyncBody::from(r#"{"error":"boom"}"#.to_string()))
+                .unwrap())
+        });
+        let client = ReverieHttpClient::new(
+            Some("http://example.test".to_string()),
+            "p".to_string(),
+            http,
+        );
+        let result = block_on(client.save_passive("s", "c", "x"));
+        assert!(result.is_ok(), "save_passive must swallow 5xx quietly");
+    }
+}
