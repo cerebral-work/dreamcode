@@ -1,6 +1,5 @@
 use crate::backend::{LlmCallRequest, Role, ZedLlmBackend};
 use reverie_deepagent::{LlmBackend, NextAction, Run, TodoList};
-use std::sync::mpsc;
 use std::thread;
 use tempfile::TempDir;
 
@@ -12,9 +11,9 @@ fn fresh_run() -> (TempDir, Run) {
 
 #[test]
 fn backend_parses_add_todo_action() {
-    let (req_tx, req_rx) = mpsc::channel::<LlmCallRequest>();
+    let (req_tx, req_rx) = smol::channel::unbounded::<LlmCallRequest>();
     let driver = thread::spawn(move || {
-        let request = req_rx.recv().unwrap();
+        let request = req_rx.recv_blocking().unwrap();
         assert!(matches!(request.messages.first(), Some((Role::System, _))));
         assert!(matches!(request.messages.last(), Some((Role::User, _))));
         request
@@ -45,16 +44,16 @@ fn backend_parses_add_todo_action() {
 
 #[test]
 fn child_has_fresh_transcript() {
-    let (req_tx, req_rx) = mpsc::channel::<LlmCallRequest>();
+    let (req_tx, req_rx) = smol::channel::unbounded::<LlmCallRequest>();
     let driver = thread::spawn(move || {
-        let parent_request = req_rx.recv().unwrap();
+        let parent_request = req_rx.recv_blocking().unwrap();
         assert_eq!(parent_request.messages.len(), 2, "parent: [System, User]");
         parent_request
             .reply
             .send(Ok(r#"{"action":"noop"}"#.to_string()))
             .unwrap();
 
-        let child_request = req_rx.recv().unwrap();
+        let child_request = req_rx.recv_blocking().unwrap();
         assert_eq!(
             child_request.messages.len(),
             2,
@@ -79,9 +78,9 @@ fn child_has_fresh_transcript() {
 
 #[test]
 fn inject_nudge_appends_user_turn_before_next_state() {
-    let (req_tx, req_rx) = mpsc::channel::<LlmCallRequest>();
+    let (req_tx, req_rx) = smol::channel::unbounded::<LlmCallRequest>();
     let driver = thread::spawn(move || {
-        let request = req_rx.recv().unwrap();
+        let request = req_rx.recv_blocking().unwrap();
         assert_eq!(request.messages.len(), 3);
         assert_eq!(request.messages[1].0, Role::User);
         assert!(request.messages[1].1.contains("NUDGE: wake up"));
@@ -102,7 +101,7 @@ fn inject_nudge_appends_user_turn_before_next_state() {
 
 #[test]
 fn transport_error_propagates_on_dropped_driver() {
-    let (req_tx, req_rx) = mpsc::channel::<LlmCallRequest>();
+    let (req_tx, req_rx) = smol::channel::unbounded::<LlmCallRequest>();
     drop(req_rx);
 
     let mut backend = ZedLlmBackend::new(req_tx);

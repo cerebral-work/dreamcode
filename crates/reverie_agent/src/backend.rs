@@ -19,17 +19,23 @@ pub struct LlmCallRequest {
 
 // LlmBackend impl that forwards every turn to a driver running on Zed's
 // foreground executor. The backend itself is sync (the trait requires it) and
-// runs on a dedicated planner thread, so blocking on an mpsc recv is safe. The
-// driver owns the `LanguageModel` handle and dispatches async completion
-// calls; this split keeps the backend free of any GPUI dependency.
+// runs on a dedicated planner thread, so blocking on `send_blocking` and
+// `reply_rx.recv()` is safe. The driver owns the `LanguageModel` handle and
+// dispatches async completion calls; this split keeps the backend free of any
+// GPUI dependency.
+//
+// The request channel is smol::channel so the foreground driver can
+// `.recv().await` without a polling loop. The reply channel is std::sync::mpsc
+// because each reply is one-shot and the foreground just does a non-blocking
+// send.
 pub struct ZedLlmBackend {
     transcript: Vec<(Role, String)>,
     system_prompt: String,
-    request_tx: mpsc::Sender<LlmCallRequest>,
+    request_tx: smol::channel::Sender<LlmCallRequest>,
 }
 
 impl ZedLlmBackend {
-    pub fn new(request_tx: mpsc::Sender<LlmCallRequest>) -> Self {
+    pub fn new(request_tx: smol::channel::Sender<LlmCallRequest>) -> Self {
         let system_prompt = format!("{DEEPAGENT_BASE_PROMPT}{JSON_PROTOCOL_SUFFIX}");
         let transcript = vec![(Role::System, system_prompt.clone())];
         Self {
@@ -42,6 +48,16 @@ impl ZedLlmBackend {
     #[cfg(test)]
     pub(crate) fn transcript(&self) -> &[(Role, String)] {
         &self.transcript
+    }
+
+    // Append a free-form user turn before the planner's first `next_action`.
+    // Used by the connection to deliver the original prompt as initial intent
+    // so the LLM sees it on iteration 1 alongside the empty todos/vfs state.
+    pub fn seed_user_message(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.transcript.push((Role::User, text.to_string()));
     }
 }
 
@@ -57,7 +73,7 @@ impl LlmBackend for ZedLlmBackend {
 
         let (reply_tx, reply_rx) = mpsc::channel();
         self.request_tx
-            .send(LlmCallRequest {
+            .send_blocking(LlmCallRequest {
                 messages: self.transcript.clone(),
                 reply: reply_tx,
             })

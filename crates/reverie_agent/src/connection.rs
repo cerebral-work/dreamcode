@@ -1,19 +1,26 @@
 use acp_thread::{AcpThread, AgentConnection, UserMessageId};
 use action_log::ActionLog;
 use agent_client_protocol as acp;
-use anyhow::Result;
+use anyhow::{Context as _, Result, anyhow};
 use collections::HashMap;
-use gpui::{App, AppContext as _, Entity, SharedString, Task, WeakEntity};
-use language_model::LanguageModel;
+use futures::StreamExt as _;
+use gpui::{App, AppContext as _, AsyncApp, Entity, SharedString, Task, WeakEntity};
+use language_model::{
+    LanguageModel, LanguageModelRequest, LanguageModelRequestMessage, MessageContent, Role,
+};
 use parking_lot::Mutex;
 use project::{AgentId, Project};
+use reverie_deepagent::{DeepAgent, Run};
 use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use util::path_list::PathList;
 
+use crate::backend::{self, LlmCallRequest, ZedLlmBackend};
 use crate::server::REVERIE_AGENT_ID;
+
+const DEFAULT_MAX_ITERATIONS: u32 = 32;
 
 struct Session {
     thread: WeakEntity<AcpThread>,
@@ -31,11 +38,6 @@ impl ReverieAgentConnection {
             model,
             sessions: Arc::new(Mutex::new(HashMap::default())),
         }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn model(&self) -> &Arc<dyn LanguageModel> {
-        &self.model
     }
 }
 
@@ -98,11 +100,90 @@ impl AgentConnection for ReverieAgentConnection {
     fn prompt(
         &self,
         _id: UserMessageId,
-        _params: acp::PromptRequest,
-        _cx: &mut App,
+        params: acp::PromptRequest,
+        cx: &mut App,
     ) -> Task<Result<acp::PromptResponse>> {
-        // Task 4 wires this to DeepAgent::execute on a background thread.
-        Task::ready(Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)))
+        let session_id = params.session_id.clone();
+        let user_text = user_text_from_prompt(&params.prompt);
+
+        let (thread_weak, cancel) = {
+            let sessions = self.sessions.lock();
+            match sessions.get(&session_id) {
+                Some(s) => (s.thread.clone(), s.cancel.clone()),
+                None => {
+                    return Task::ready(Err(anyhow!(
+                        "unknown session {:?}",
+                        session_id.0.as_ref()
+                    )));
+                }
+            }
+        };
+
+        let model = self.model.clone();
+
+        cx.spawn(async move |cx| {
+            let (req_tx, req_rx) = smol::channel::unbounded::<LlmCallRequest>();
+
+            let cancel_for_planner = cancel.clone();
+            let user_text_for_planner = user_text.clone();
+            let planner_task = smol::unblock(move || -> Result<reverie_deepagent::PlannerResult> {
+                let mut backend = ZedLlmBackend::new(req_tx);
+                // The user's prompt is bolted onto the system transcript as an
+                // extra user turn so the model sees intent on iteration 1.
+                // `Run::new_default` creates a fresh scratch dir per prompt —
+                // Phase 1 has no cross-prompt persistence.
+                backend.seed_user_message(&user_text_for_planner);
+                let _ = cancel_for_planner; // Task 8 wires this to PlannerObserver::should_stop
+
+                let run = Run::new_default()
+                    .map_err(|e| anyhow!("vfs init failed: {e}"))?;
+                let deep = DeepAgent::new(run, DEFAULT_MAX_ITERATIONS);
+                Ok(deep.execute(&mut backend))
+            });
+
+            while let Ok(req) = req_rx.recv().await {
+                let request = build_language_model_request(req.messages);
+                let text_result = stream_to_string(&model, request, &cx).await;
+                let reply_payload = match text_result {
+                    Ok(text) => Ok(text),
+                    Err(e) => Err(e.to_string()),
+                };
+                if req.reply.send(reply_payload).is_err() {
+                    log::warn!(
+                        "reverie planner dropped its reply channel while the driver still held a request"
+                    );
+                }
+            }
+
+            let planner_result = planner_task
+                .await
+                .context("reverie planner thread failed")?;
+
+            let summary = format!(
+                "planner terminated: {:?} (iterations={}, todos_pending={}, spawns={})",
+                planner_result.termination,
+                planner_result.iterations,
+                planner_result.todos.pending_count(),
+                planner_result.spawn_log.len()
+            );
+
+            let summary_chunk = acp::ContentChunk::new(acp::ContentBlock::Text(
+                acp::TextContent::new(summary),
+            ));
+            let update_result = thread_weak.update(cx, |thread, cx| {
+                if let Err(e) = thread.handle_session_update(
+                    acp::SessionUpdate::AgentMessageChunk(summary_chunk),
+                    cx,
+                ) {
+                    log::warn!("reverie: failed to push final summary update: {e}");
+                }
+            });
+            if update_result.is_err() {
+                log::debug!("reverie: session thread dropped before final summary");
+            }
+
+            Ok(acp::PromptResponse::new(acp::StopReason::EndTurn))
+        })
     }
 
     fn cancel(&self, session_id: &acp::SessionId, _cx: &mut App) {
@@ -116,4 +197,52 @@ impl AgentConnection for ReverieAgentConnection {
     fn into_any(self: Rc<Self>) -> Rc<dyn Any> {
         self
     }
+}
+
+fn user_text_from_prompt(blocks: &[acp::ContentBlock]) -> String {
+    blocks
+        .iter()
+        .filter_map(|b| match b {
+            acp::ContentBlock::Text(t) => Some(t.text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn build_language_model_request(messages: Vec<(backend::Role, String)>) -> LanguageModelRequest {
+    let messages = messages
+        .into_iter()
+        .map(|(role, content)| LanguageModelRequestMessage {
+            role: match role {
+                backend::Role::System => Role::System,
+                backend::Role::User => Role::User,
+                backend::Role::Assistant => Role::Assistant,
+            },
+            content: vec![MessageContent::Text(content)],
+            cache: false,
+            reasoning_details: None,
+        })
+        .collect();
+    LanguageModelRequest {
+        messages,
+        ..Default::default()
+    }
+}
+
+async fn stream_to_string(
+    model: &Arc<dyn LanguageModel>,
+    request: LanguageModelRequest,
+    cx: &AsyncApp,
+) -> Result<String> {
+    let mut text_stream = model
+        .stream_completion_text(request, cx)
+        .await
+        .map_err(|e| anyhow!("stream_completion_text failed: {e}"))?;
+    let mut text = String::new();
+    while let Some(chunk) = text_stream.stream.next().await {
+        let chunk = chunk.map_err(|e| anyhow!("stream chunk error: {e}"))?;
+        text.push_str(&chunk);
+    }
+    Ok(text)
 }
