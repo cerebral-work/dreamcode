@@ -59,6 +59,40 @@ Retrieval and save payloads are scoped to a project. Resolution order:
 3. First visible worktree's root directory name.
 4. Literal `"unknown-project"` if no worktree is open.
 
+## Memory for non-Reverie agents (Phase 1.5b)
+
+When you pick Claude, Gemini, Zed Agent, or any Custom ACP agent in the agent panel, Zed wraps that agent's connection in a memory-augmented middleware:
+
+1. **Before each prompt** — calls `GET /context/smart?q=<your prompt>&project=<project>` with a 5s timeout. On a non-empty hit, a `Relevant memory:\n<block>\n` text block is prepended to the outgoing prompt (position 0), before any user text or mentions.
+2. **After each successful prompt** (`StopReason::EndTurn`) — fires a fire-and-forget POST to `/observations/passive`:
+   - `{ session_id, content: <your prompt>, project, source: "zed-augment-user-intent" }`
+
+Failed prompts (non-EndTurn terminations) do NOT save.
+
+### Opt-out per agent
+
+Set `REVERIE_AUGMENT=0` in the agent's env block:
+
+```json
+{
+  "agent_servers": {
+    "claude-acp": {
+      "env": {
+        "REVERIE_AUGMENT": "0"
+      }
+    }
+  }
+}
+```
+
+(Applies to Extension and Registry agent settings variants. Custom-command agents don't have a top-level `env` map in Phase 1.5b; future work.)
+
+### What's different from the Reverie agent
+
+- **No UI breadcrumb.** The wrapped agent's chat doesn't show a "[memory] consulted reverie" chunk. Check reveried's logs to confirm retrieval happened.
+- **User intent only; no assistant-side capture.** The wrapper can't see the LLM's response text through `PromptResponse`, so only the user's prompt is saved to reverie. Switch to the Reverie agent for fuller capture.
+- **Thread import and thread archive rehydration bypass augmentation.** Those code paths don't have a project handle in scope; they use `Agent::server_without_augment` and see no retrieval.
+
 ## Persistent session state
 
 Each agent panel thread keeps its own persistent planner state for the lifetime of the Zed session:
