@@ -59,6 +59,25 @@ Retrieval and save payloads are scoped to a project. Resolution order:
 3. First visible worktree's root directory name.
 4. Literal `"unknown-project"` if no worktree is open.
 
+## Persistent session state
+
+Each agent panel thread keeps its own persistent planner state for the lifetime of the Zed session:
+
+- **TodoList carries over.** When you send prompt 2 in the same thread, the planner sees the todos from prompt 1's final state. Pending, in-progress, and completed entries are all preserved. Phrase follow-ups like "keep going" or "update the status on todo 3" and the planner sees them in its initial state.
+- **Scratch Vfs is stable.** Every session has its own scratch dir at `<zed-data-dir>/reverie-runs/<session_id>/`. Files the planner wrote in prompt 1 (via `vfs_write`) are readable in prompt 2.
+- **LLM transcript does NOT carry over.** Each prompt gets a fresh transcript; the LLM is told "here are your current todos" and "here's your scratch" via reverie's state rendering. This is deliberate — it keeps token cost stable across long threads and matches how the deepagent is designed to operate.
+
+### New thread = fresh state
+
+Click the **+** button in the agent panel to start a new thread. The new thread gets its own `session_id`, its own scratch dir, and an empty TodoList.
+
+### Phase 1.5c limitations
+
+- **No cross-Zed-restart persistence.** Closing Zed throws away the in-memory TodoList; the scratch dir stays on disk but nothing points at it anymore. Phase B will serialize session state across restarts.
+- **No cleanup of old scratch dirs.** `<zed-data-dir>/reverie-runs/` accumulates a directory per session indefinitely. If you need to reclaim space, delete the directory manually. Phase B adds retention.
+- **No concurrent prompts on the same thread.** If you try to send a second prompt while the first is still running, you'll get `"a run is already in progress for this session; cancel it first"`. Use the panel's Cancel button, or start a new thread.
+- **No UI to list or resume past sessions.** Each thread's scratch dir is named by `session_id`, which isn't surfaced in Zed's history view today. Phase C will address.
+
 ## What you'll see
 
 The panel renders planner steps as inline chunks:
@@ -92,7 +111,7 @@ Clicking **Stop** in the agent panel flips a per-session `AtomicBool` that the p
 
 ## Known limitations
 
-- **No persistence between prompts.** Each prompt builds a fresh `Run` with an empty todo list and empty scratch vfs.
+- **Session state is in-memory only.** See "Persistent session state" above for what carries across prompts (TodoList + Vfs) and what doesn't (LLM transcript, cross-restart state).
 - **No live streaming within subagents.** The observer only fires on the top-level planner loop; nested subagent planners run to completion before their `SpawnObservation` ships.
 - **Cancel is coarse.** It stops the *next* iteration, not the in-flight LLM call.
 - **Retrieval is once-per-prompt, not per-iteration.** Memory is consulted at prompt start only. A future phase may add per-iteration or per-spawn retrieval.
