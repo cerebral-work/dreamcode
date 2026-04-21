@@ -14799,6 +14799,7 @@ dependencies = [
  "language_model",
  "log",
  "parking_lot",
+ "paths",
  "project",
  "reverie-deepagent",
  "serde",

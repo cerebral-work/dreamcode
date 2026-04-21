@@ -122,10 +122,24 @@ impl AgentConnection for ReverieAgentConnection {
         cx: &mut App,
     ) -> Task<Result<Entity<AcpThread>>> {
         let session_id = acp::SessionId::new(uuid::Uuid::new_v4().to_string());
-        let run = match reverie_deepagent::Run::new_default() {
+        let scratch_root = paths::data_dir()
+            .join("reverie-runs")
+            .join(session_id.0.as_ref());
+        let run = match build_persistent_run(&scratch_root, &session_id) {
             Ok(r) => Arc::new(r),
             Err(e) => {
-                return Task::ready(Err(anyhow!("Run::new_default failed: {e}")));
+                log::warn!(
+                    "reverie: failed to create stable scratch dir at {}: {e}. Falling back to ephemeral Run.",
+                    scratch_root.display()
+                );
+                match reverie_deepagent::Run::new_default() {
+                    Ok(r) => Arc::new(r),
+                    Err(fallback_err) => {
+                        return Task::ready(Err(anyhow!(
+                            "reverie: even temp-dir fallback failed: {fallback_err}"
+                        )));
+                    }
+                }
             }
         };
         let session_state = Arc::new(Mutex::new(SessionState {
@@ -343,6 +357,22 @@ impl AgentConnection for ReverieAgentConnection {
     fn into_any(self: Rc<Self>) -> Rc<dyn Any> {
         self
     }
+}
+
+fn build_persistent_run(
+    scratch_root: &std::path::Path,
+    session_id: &acp::SessionId,
+) -> Result<reverie_deepagent::Run> {
+    std::fs::create_dir_all(scratch_root)
+        .with_context(|| format!("mkdir {}", scratch_root.display()))?;
+    let vfs = reverie_deepagent::Vfs::new(scratch_root)
+        .map_err(|e| anyhow!("Vfs::new failed: {e}"))?;
+    Ok(reverie_deepagent::Run {
+        id: session_id.0.as_ref().to_string(),
+        scratch_root: scratch_root.to_path_buf(),
+        vfs,
+        depth: 0,
+    })
 }
 
 fn user_text_from_prompt(blocks: &[acp::ContentBlock]) -> String {
