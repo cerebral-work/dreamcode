@@ -272,3 +272,89 @@ mod http_tests {
         assert!(result.is_ok(), "save_passive must swallow 5xx quietly");
     }
 }
+
+mod session_slot_tests {
+    use crate::connection::{InProgressGuard, SessionState, acquire_run_slot};
+    use parking_lot::Mutex;
+    use reverie_deepagent::{Run, TodoList};
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    fn fresh_state() -> Arc<Mutex<SessionState>> {
+        let parent = TempDir::new().unwrap();
+        // Leak the TempDir on purpose — the Run's scratch_root needs to outlive
+        // this helper. Tests get a fresh process each `cargo test` invocation.
+        let parent_path = parent.keep();
+        let root = parent_path.join("session-test");
+        std::fs::create_dir_all(&root).unwrap();
+        let vfs = reverie_deepagent::Vfs::new(&root).unwrap();
+        let run = Run {
+            id: "session-test".into(),
+            scratch_root: root,
+            vfs,
+            depth: 0,
+        };
+        Arc::new(Mutex::new(SessionState {
+            run: Arc::new(run),
+            todos: TodoList::new(),
+            in_progress: false,
+        }))
+    }
+
+    #[test]
+    fn rejects_when_in_progress() {
+        let state = fresh_state();
+        state.lock().in_progress = true;
+        let result = acquire_run_slot(&state);
+        assert!(result.is_err(), "should reject when in_progress");
+        let msg = result.err().unwrap().to_string();
+        assert!(
+            msg.contains("already in progress"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[test]
+    fn returns_current_todos_snapshot() {
+        let state = fresh_state();
+        state.lock().todos.add("alpha");
+
+        let (_run, initial, _guard) = acquire_run_slot(&state).unwrap();
+        assert_eq!(initial.entries().len(), 1);
+        assert_eq!(initial.entries()[0].description, "alpha");
+
+        // Releasing the slot so lock is available, then mutating state.todos
+        // — the snapshot we captured must not reflect the later mutation
+        // (proves it's a clone, not a reference).
+        drop(_guard);
+        state.lock().todos.add("beta");
+        assert_eq!(initial.entries().len(), 1, "snapshot should be a clone");
+    }
+
+    #[test]
+    fn guard_clears_in_progress_on_drop() {
+        let state = fresh_state();
+        let (_run, _todos, guard) = acquire_run_slot(&state).unwrap();
+        assert!(state.lock().in_progress, "acquire sets in_progress");
+        drop(guard);
+        assert!(
+            !state.lock().in_progress,
+            "dropping the guard must clear in_progress"
+        );
+    }
+
+    #[test]
+    fn guard_clears_in_progress_on_panic() {
+        let state = fresh_state();
+        let state_for_panic = state.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (_run, _todos, _guard) = acquire_run_slot(&state_for_panic).unwrap();
+            panic!("simulated failure while holding the slot");
+        }));
+        assert!(result.is_err(), "the panic should propagate out of catch_unwind");
+        assert!(
+            !state.lock().in_progress,
+            "in_progress must be cleared even when the guard is dropped via panic"
+        );
+    }
+}

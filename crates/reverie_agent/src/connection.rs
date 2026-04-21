@@ -26,6 +26,57 @@ const DEFAULT_MAX_ITERATIONS: u32 = 32;
 struct Session {
     thread: WeakEntity<AcpThread>,
     cancel: Arc<AtomicBool>,
+    state: Arc<Mutex<SessionState>>,
+}
+
+pub(crate) struct SessionState {
+    pub(crate) run: Arc<reverie_deepagent::Run>,
+    pub(crate) todos: reverie_deepagent::TodoList,
+    pub(crate) in_progress: bool,
+}
+
+/// RAII guard that clears `in_progress` when dropped, including on panic
+/// unwind. Returned by [`acquire_run_slot`] so the caller's normal control
+/// flow (success, early return, or panic) all converge on "slot released".
+pub(crate) struct InProgressGuard {
+    state: Arc<Mutex<SessionState>>,
+}
+
+impl Drop for InProgressGuard {
+    fn drop(&mut self) {
+        self.state.lock().in_progress = false;
+    }
+}
+
+/// Acquire the per-session "run in progress" slot. Returns the Arc<Run> and a
+/// snapshot of the current TodoList (cloned, not shared), plus an
+/// InProgressGuard that clears the flag on drop.
+///
+/// Rejects with an error when a run is already in progress on this session —
+/// concurrent prompts on the same session are not supported in Phase 1.5c.
+pub(crate) fn acquire_run_slot(
+    state: &Arc<Mutex<SessionState>>,
+) -> Result<(
+    Arc<reverie_deepagent::Run>,
+    reverie_deepagent::TodoList,
+    InProgressGuard,
+)> {
+    let mut st = state.lock();
+    if st.in_progress {
+        return Err(anyhow!(
+            "a run is already in progress for this session; cancel it first"
+        ));
+    }
+    st.in_progress = true;
+    let run = st.run.clone();
+    let initial_todos = st.todos.clone();
+    Ok((
+        run,
+        initial_todos,
+        InProgressGuard {
+            state: state.clone(),
+        },
+    ))
 }
 
 pub struct ReverieAgentConnection {
@@ -71,6 +122,17 @@ impl AgentConnection for ReverieAgentConnection {
         cx: &mut App,
     ) -> Task<Result<Entity<AcpThread>>> {
         let session_id = acp::SessionId::new(uuid::Uuid::new_v4().to_string());
+        let run = match reverie_deepagent::Run::new_default() {
+            Ok(r) => Arc::new(r),
+            Err(e) => {
+                return Task::ready(Err(anyhow!("Run::new_default failed: {e}")));
+            }
+        };
+        let session_state = Arc::new(Mutex::new(SessionState {
+            run,
+            todos: reverie_deepagent::TodoList::new(),
+            in_progress: false,
+        }));
         let action_log = cx.new(|_| ActionLog::new(project.clone()));
         let capabilities_rx = watch::Receiver::constant(
             acp::PromptCapabilities::new()
@@ -98,6 +160,7 @@ impl AgentConnection for ReverieAgentConnection {
             Session {
                 thread: thread.downgrade(),
                 cancel: Arc::new(AtomicBool::new(false)),
+                state: session_state,
             },
         );
         Task::ready(Ok(thread))
