@@ -14805,10 +14805,12 @@ dependencies = [
  "settings",
  "smol",
  "tempfile",
+ "tiny_http",
  "ui",
  "util",
  "uuid",
  "watch",
+ "zed-reqwest",
 ]
 
 [[package]]
@@ -22514,6 +22516,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
+ "webpki-roots 0.26.8",
  "windows-registry 0.4.0",
 ]
 

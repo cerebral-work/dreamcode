@@ -6,10 +6,12 @@
 
 mod backend;
 mod connection;
+mod http;
 mod observer;
 mod server;
 
 #[cfg(test)]
 mod tests;
 
+pub use http::ReverieHttpClient;
 pub use server::{REVERIE_AGENT_ID, ReverieAgentServer};
