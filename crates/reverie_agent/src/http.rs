@@ -93,7 +93,14 @@ impl ReverieHttpClient {
                 return Ok(None);
             }
         };
-        if body.context.trim().is_empty() {
+        let trimmed = body.context.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        // Reveried returns this sentinel when /context/smart has no hits
+        // for the requested project. Treat it like an empty result so the
+        // host doesn't burn a UI breadcrumb on a no-op retrieval.
+        if trimmed == "No previous session memories found." {
             return Ok(None);
         }
         Ok(Some(SmartContext { content: body.context }))
