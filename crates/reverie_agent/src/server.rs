@@ -1,6 +1,6 @@
 use acp_thread::AgentConnection;
 use agent_servers::{AgentServer, AgentServerDelegate};
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use gpui::{App, Entity, Task};
 use http_client::HttpClient;
 use language_model::{LanguageModel, LanguageModelRegistry};
