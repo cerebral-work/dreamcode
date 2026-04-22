@@ -92,6 +92,16 @@ impl LlmBackend for ZedLlmBackend {
         self.transcript.push((Role::User, format!("NUDGE: {msg}")));
     }
 
+    fn seed_task(&mut self, task: &str) {
+        if task.is_empty() {
+            return;
+        }
+        self.transcript.push((
+            Role::User,
+            format!("You have been spawned as a subagent with this task: {task}"),
+        ));
+    }
+
     fn child(&self) -> Result<Box<dyn LlmBackend + Send>, BackendError> {
         let child = Self {
             transcript: vec![(Role::System, self.system_prompt.clone())],
