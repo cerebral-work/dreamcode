@@ -85,18 +85,13 @@ pub(crate) fn acquire_run_slot(
 }
 
 pub struct ReverieAgentConnection {
-    model: Arc<dyn LanguageModel>,
     sessions: Arc<Mutex<HashMap<acp::SessionId, Session>>>,
     http_client: Arc<crate::ReverieHttpClient>,
 }
 
 impl ReverieAgentConnection {
-    pub fn new(
-        model: Arc<dyn LanguageModel>,
-        http_client: Arc<crate::ReverieHttpClient>,
-    ) -> Self {
+    pub fn new(http_client: Arc<crate::ReverieHttpClient>) -> Self {
         Self {
-            model,
             sessions: Arc::new(Mutex::new(HashMap::default())),
             http_client,
         }
@@ -231,7 +226,13 @@ impl AgentConnection for ReverieAgentConnection {
                 Err(e) => return Task::ready(Err(e)),
             };
 
-        let model = self.model.clone();
+        // Phase 1.5d-fix: resolve the language model at prompt time instead
+        // of connect time, so background provider authentication (Pro trial
+        // sign-in, OAuth, etc.) has landed before we first need a model.
+        let model = match crate::server::ReverieAgentServer::resolve_model_now(cx) {
+            Ok(m) => m,
+            Err(e) => return Task::ready(Err(e)),
+        };
         let http_client = self.http_client.clone();
 
         cx.spawn(async move |cx| {

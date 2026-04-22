@@ -23,14 +23,15 @@ impl ReverieAgentServer {
         Self
     }
 
-    fn default_model(cx: &App) -> Result<Arc<dyn LanguageModel>> {
+    /// Resolve a language model at prompt time (not at connect time), so
+    /// lazy provider authentication (Pro trial, OAuth flows, etc.) has time
+    /// to complete before we try to pick a model. Prefers the user's
+    /// configured default, falls back to the first available.
+    pub(crate) fn resolve_model_now(cx: &App) -> Result<Arc<dyn LanguageModel>> {
         let registry = LanguageModelRegistry::read_global(cx);
         if let Some(m) = registry.default_model() {
             return Ok(m.model);
         }
-        // Fall back to the first authenticated provider's first available
-        // model so the Reverie agent works out-of-the-box for users who
-        // haven't explicitly set a default (e.g. fresh Zed Pro trial).
         if let Some(model) = registry.available_models(cx).next() {
             return Ok(model);
         }
@@ -77,16 +78,16 @@ impl AgentServer for ReverieAgentServer {
         project: Entity<Project>,
         cx: &mut App,
     ) -> Task<Result<Rc<dyn AgentConnection>>> {
-        let model = match Self::default_model(cx) {
-            Ok(m) => m,
-            Err(e) => return Task::ready(Err(e)),
-        };
+        // Note: we do NOT resolve a model here. Model lookup is deferred
+        // to prompt() time so background provider authentication (Pro
+        // trial sign-in, OAuth, etc.) has time to complete before we
+        // first need a model.
         let base_url = Self::resolve_base_url();
         let project_name = Self::resolve_project(&project, cx);
         let http: Arc<dyn HttpClient> = project.read(cx).client().http_client();
         let http_client = ReverieHttpClient::new(base_url, project_name, http);
         let connection: Rc<dyn AgentConnection> =
-            Rc::new(ReverieAgentConnection::new(model, http_client));
+            Rc::new(ReverieAgentConnection::new(http_client));
         Task::ready(Ok(connection))
     }
 
