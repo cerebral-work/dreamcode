@@ -24,10 +24,19 @@ impl ReverieAgentServer {
     }
 
     fn default_model(cx: &App) -> Result<Arc<dyn LanguageModel>> {
-        LanguageModelRegistry::read_global(cx)
-            .default_model()
-            .map(|m| m.model)
-            .context("no default language model configured — pick one in settings before using the Reverie agent")
+        let registry = LanguageModelRegistry::read_global(cx);
+        if let Some(m) = registry.default_model() {
+            return Ok(m.model);
+        }
+        // Fall back to the first authenticated provider's first available
+        // model so the Reverie agent works out-of-the-box for users who
+        // haven't explicitly set a default (e.g. fresh Zed Pro trial).
+        if let Some(model) = registry.available_models(cx).next() {
+            return Ok(model);
+        }
+        Err(anyhow::anyhow!(
+            "no language models available — configure at least one provider in Agent Settings before using the Reverie agent"
+        ))
     }
 
     fn resolve_base_url() -> Option<String> {
