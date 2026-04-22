@@ -3374,6 +3374,38 @@ impl AgentPanel {
                                     }
                                 }),
                         )
+                        .item(
+                            ContextMenuEntry::new("Reverie")
+                                .when(is_agent_selected(Agent::ReverieAgent), |this| {
+                                    this.action(Box::new(NewExternalAgentThread { agent: None }))
+                                })
+                                .icon(IconName::ZedAgent)
+                                .icon_color(Color::Muted)
+                                .handler({
+                                    let workspace = workspace.clone();
+                                    move |window, cx| {
+                                        if let Some(workspace) = workspace.upgrade() {
+                                            workspace.update(cx, |workspace, cx| {
+                                                if let Some(panel) =
+                                                    workspace.panel::<AgentPanel>(cx)
+                                                {
+                                                    panel.update(cx, |panel, cx| {
+                                                        panel.selected_agent = Agent::ReverieAgent;
+                                                        let id = panel.create_thread(
+                                                            "agent_panel",
+                                                            window,
+                                                            cx,
+                                                        );
+                                                        panel.activate_retained_thread(
+                                                            id, true, window, cx,
+                                                        );
+                                                    });
+                                                }
+                                            });
+                                        }
+                                    }
+                                }),
+                        )
                         .map(|mut menu| {
                             let agent_server_store = agent_server_store.read(cx);
                             let registry_store = project::AgentRegistryStore::try_global(cx);
