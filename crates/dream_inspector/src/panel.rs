@@ -57,16 +57,7 @@ impl DreamInspectorPanel {
         let dream_http = DreamHttpClient::new(base_url, http_client);
 
         let feed = cx.new(|_| FeedModel::new(dream_http));
-
-        // start_polling needs Context<FeedModel>; obtain it via the entity handle.
-        {
-            let weak = feed.downgrade();
-            feed.update(cx, |_, feed_cx| {
-                if let Some(entity) = weak.upgrade() {
-                    FeedModel::start_polling(&entity, feed_cx);
-                }
-            });
-        }
+        feed.update(cx, |m, feed_cx| m.start_polling(feed_cx));
 
         let subscription = cx.subscribe(&feed, |_this, _feed, _event: &FeedEvent, cx| {
             cx.notify();

@@ -3,7 +3,7 @@
 
 use crate::categories::{Category, CategoryFilter};
 use crate::http::{ClientError, DreamHttpClient, WireEvent};
-use gpui::{Context, Entity, EventEmitter, Task};
+use gpui::{Context, EventEmitter, Task};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
@@ -121,23 +121,26 @@ impl FeedModel {
     // empty poll. Lives for the lifetime of the entity; on drop, the task
     // is cancelled. Paused → skip the call but keep the task alive.
 
-    pub fn start_polling(entity: &Entity<Self>, cx: &mut Context<Self>) {
-        let weak = entity.downgrade();
-        let task = cx.spawn(async move |_this, cx| {
+    pub fn start_polling(&mut self, cx: &mut Context<Self>) {
+        // Installs the poll task on `self.poll_task`. Called from inside a
+        // `feed.update(cx, |m, cx| m.start_polling(cx))` — so `cx` is the
+        // FeedModel context that already owns the mutable lease on self,
+        // and we set the field directly instead of re-entering via
+        // `entity.update(...)` (which would double-lease-panic).
+        let task = cx.spawn(async move |this, cx| {
             let mut interval = Duration::from_millis(1_000);
             loop {
                 cx.background_executor().timer(interval).await;
 
-                let (http, after, cats, paused) = match weak.read_with(cx, |m, _| {
+                let Ok((http, after, cats, paused)) = this.read_with(cx, |m, _| {
                     (
                         m.http.clone(),
                         m.cursor.clone(),
                         m.categories.as_query(),
                         m.paused,
                     )
-                }) {
-                    Ok(v) => v,
-                    Err(_) => return, // entity gone
+                }) else {
+                    return; // entity gone
                 };
 
                 if paused {
@@ -147,16 +150,10 @@ impl FeedModel {
 
                 let result = http.recent(after.as_deref(), 100, &cats).await;
                 let new_interval = match &result {
-                    Ok(resp) => {
-                        if resp.events.is_empty() {
-                            Duration::from_millis(3_000)
-                        } else {
-                            Duration::from_millis(1_000)
-                        }
-                    }
-                    Err(_) => Duration::from_millis(3_000),
+                    Ok(resp) if !resp.events.is_empty() => Duration::from_millis(1_000),
+                    _ => Duration::from_millis(3_000),
                 };
-                if weak
+                if this
                     .update(cx, |m, cx| match result {
                         Ok(resp) => {
                             m.push_batch(resp.events, resp.next_after, cx);
@@ -181,9 +178,7 @@ impl FeedModel {
                 interval = new_interval;
             }
         });
-        // Install the task on the entity. Must update via the entity handle
-        // since we're inside a Context<Self>::spawn above.
-        entity.update(cx, |m, _| m.poll_task = Some(task));
+        self.poll_task = Some(task);
     }
 }
 
