@@ -5076,6 +5076,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "dream_inspector"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "collections",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "log",
+ "parking_lot",
+ "project",
+ "serde",
+ "serde_json",
+ "settings",
+ "smol",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "dtoa"
 version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -22320,6 +22341,7 @@ dependencies = [
  "debugger_ui",
  "dev_container",
  "diagnostics",
+ "dream_inspector",
  "edit_prediction",
  "edit_prediction_ui",
  "editor",
