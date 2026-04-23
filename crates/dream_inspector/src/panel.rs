@@ -221,3 +221,61 @@ impl Render for DreamInspectorPanel {
             .child(self.render_status(cx))
     }
 }
+
+impl Panel for DreamInspectorPanel {
+    fn persistent_name() -> &'static str {
+        "DreamInspectorPanel"
+    }
+
+    fn panel_key() -> &'static str {
+        PANEL_KEY
+    }
+
+    fn position(&self, _window: &Window, _cx: &App) -> DockPosition {
+        DockPosition::Bottom
+    }
+
+    fn position_is_valid(&self, position: DockPosition) -> bool {
+        matches!(position, DockPosition::Bottom)
+    }
+
+    fn set_position(
+        &mut self,
+        _position: DockPosition,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+    }
+
+    fn default_size(&self, _window: &Window, _cx: &App) -> gpui::Pixels {
+        gpui::px(260.0)
+    }
+
+    fn icon(&self, _window: &Window, _cx: &App) -> Option<IconName> {
+        Some(IconName::Sparkle)
+    }
+
+    fn icon_tooltip(&self, _window: &Window, _cx: &App) -> Option<&'static str> {
+        Some("Dream Inspector")
+    }
+
+    fn toggle_action(&self) -> Box<dyn Action> {
+        Box::new(Toggle)
+    }
+
+    fn activation_priority(&self) -> u32 {
+        5
+    }
+}
+
+impl DreamInspectorPanel {
+    pub async fn load(
+        workspace: gpui::WeakEntity<Workspace>,
+        mut cx: gpui::AsyncWindowContext,
+    ) -> anyhow::Result<Entity<Self>> {
+        workspace.update_in(&mut cx, |workspace, _window, cx| {
+            let project = workspace.project().clone();
+            cx.new(|cx| DreamInspectorPanel::new(workspace, project, cx))
+        })
+    }
+}
