@@ -53,6 +53,7 @@ members = [
     "crates/denoise",
     "crates/dev_container",
     "crates/diagnostics",
+    "crates/dream_inspector",
     "crates/docs_preprocessor",
     "crates/edit_prediction",
     "crates/edit_prediction_cli",
@@ -319,6 +320,7 @@ derive_refineable = { path = "crates/refineable/derive_refineable" }
 dev_container = { path = "crates/dev_container" }
 diagnostics = { path = "crates/diagnostics" }
 dialoguer = { version = "0.12", default-features = false }
+dream_inspector = { path = "crates/dream_inspector" }
 editor = { path = "crates/editor" }
 encoding_selector = { path = "crates/encoding_selector" }
 env_var = { path = "crates/env_var" }
