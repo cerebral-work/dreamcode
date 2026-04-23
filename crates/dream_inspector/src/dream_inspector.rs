@@ -10,7 +10,7 @@ pub mod feed;
 pub mod http;
 pub mod panel;
 
-// pub use panel::DreamInspectorPanel;  // re-exported after Task B5
+pub use panel::DreamInspectorPanel;
 
 use gpui::App;
 
