@@ -25,9 +25,17 @@ struct SmartContextResponse {
     context: String,
 }
 
+// Shape: reveried's `AddObservationParams` (POST /observations). We use the
+// direct-add endpoint rather than /observations/passive because passive
+// capture runs markdown-section extraction (`## Key Learnings:` bullets) and
+// silently drops content that lacks that structure — which is all of our raw
+// prompt / run-summary text.
 #[derive(Serialize)]
-struct PassiveCaptureBody<'a> {
+struct AddObservationBody<'a> {
     session_id: &'a str,
+    #[serde(rename = "type")]
+    r#type: &'a str,
+    title: &'a str,
     content: &'a str,
     project: &'a str,
     source: &'a str,
@@ -106,21 +114,24 @@ impl ReverieHttpClient {
         Ok(Some(SmartContext { content: body.context }))
     }
 
-    pub async fn save_passive(
+    pub async fn save_observation(
         &self,
         session_id: &str,
+        title: &str,
         content: &str,
         source: &str,
     ) -> Result<()> {
-        let uri = format!("{}/observations/passive", self.base_url);
-        let body_obj = PassiveCaptureBody {
+        let uri = format!("{}/observations", self.base_url);
+        let body_obj = AddObservationBody {
             session_id,
+            r#type: "note",
+            title,
             content,
             project: &self.project,
             source,
         };
         let body_json = serde_json::to_string(&body_obj)
-            .map_err(|e| anyhow!("serialize passive capture body: {e}"))?;
+            .map_err(|e| anyhow!("serialize add observation body: {e}"))?;
         match self
             .http
             .post_json(&uri, AsyncBody::from(body_json))
@@ -128,7 +139,7 @@ impl ReverieHttpClient {
         {
             Ok(response) if response.status().is_success() => Ok(()),
             Ok(response) => {
-                self.note_first_fail(&format!("save_passive HTTP {}", response.status()));
+                self.note_first_fail(&format!("save_observation HTTP {}", response.status()));
                 Ok(())
             }
             Err(e) => {

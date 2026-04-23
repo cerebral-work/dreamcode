@@ -72,7 +72,13 @@ impl AgentConnection for ReverieAugmentedConnection {
         work_dirs: PathList,
         cx: &mut App,
     ) -> Task<Result<Entity<acp_thread::AcpThread>>> {
-        self.inner.clone().new_session(project, work_dirs, cx)
+        let this = self.clone();
+        let inner_task = self.inner.clone().new_session(project, work_dirs, cx);
+        cx.spawn(async move |cx| {
+            let thread = inner_task.await?;
+            install_wrapper_connection(&thread, this, cx)?;
+            Ok(thread)
+        })
     }
 
     fn supports_load_session(&self) -> bool {
@@ -87,9 +93,16 @@ impl AgentConnection for ReverieAugmentedConnection {
         title: Option<SharedString>,
         cx: &mut App,
     ) -> Task<Result<Entity<acp_thread::AcpThread>>> {
-        self.inner
+        let this = self.clone();
+        let inner_task = self
+            .inner
             .clone()
-            .load_session(session_id, project, work_dirs, title, cx)
+            .load_session(session_id, project, work_dirs, title, cx);
+        cx.spawn(async move |cx| {
+            let thread = inner_task.await?;
+            install_wrapper_connection(&thread, this, cx)?;
+            Ok(thread)
+        })
     }
 
     fn supports_close_session(&self) -> bool {
@@ -116,9 +129,16 @@ impl AgentConnection for ReverieAugmentedConnection {
         title: Option<SharedString>,
         cx: &mut App,
     ) -> Task<Result<Entity<acp_thread::AcpThread>>> {
-        self.inner
+        let this = self.clone();
+        let inner_task = self
+            .inner
             .clone()
-            .resume_session(session_id, project, work_dirs, title, cx)
+            .resume_session(session_id, project, work_dirs, title, cx);
+        cx.spawn(async move |cx| {
+            let thread = inner_task.await?;
+            install_wrapper_connection(&thread, this, cx)?;
+            Ok(thread)
+        })
     }
 
     fn supports_session_history(&self) -> bool {
@@ -156,8 +176,9 @@ impl AgentConnection for ReverieAugmentedConnection {
             if matches!(response.stop_reason, acp::StopReason::EndTurn) {
                 let session_id_str = session_id.0.as_ref().to_string();
                 let _ = http
-                    .save_passive(
+                    .save_observation(
                         &session_id_str,
+                        "user prompt",
                         &user_text,
                         "zed-augment-user-intent",
                     )
@@ -229,6 +250,25 @@ impl AgentConnection for ReverieAugmentedConnection {
     fn into_any(self: Rc<Self>) -> Rc<dyn Any> {
         self
     }
+}
+
+// Swap the AcpThread's stored AgentConnection with `wrapper` so subsequent
+// `thread.connection().prompt(...)` calls route through our augment layer.
+// NativeAgentConnection::new_session creates a fresh self-referential
+// connection and installs it in the thread, which would otherwise bypass
+// this wrapper entirely (the wrapper's new_session is a pure delegate).
+fn install_wrapper_connection(
+    thread: &Entity<acp_thread::AcpThread>,
+    wrapper: Rc<ReverieAugmentedConnection>,
+    cx: &mut gpui::AsyncApp,
+) -> Result<()> {
+    cx.update(|cx| {
+        thread.update(cx, |thread, _| {
+            let wrapper_conn: Rc<dyn AgentConnection> = wrapper;
+            thread.set_connection(wrapper_conn);
+        });
+    });
+    Ok(())
 }
 
 fn user_text_from_prompt(blocks: &[acp::ContentBlock]) -> String {

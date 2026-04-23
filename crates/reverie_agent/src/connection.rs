@@ -368,7 +368,7 @@ impl AgentConnection for ReverieAgentConnection {
                 log::debug!("reverie: session thread dropped before final summary");
             }
 
-            // Auto-save on clean terminations only. Fire-and-forget — save_passive
+            // Auto-save on clean terminations only. Fire-and-forget — save_observation
             // never propagates errors, so let-underscore is correct here.
             if matches!(
                 planner_result.termination,
@@ -376,14 +376,20 @@ impl AgentConnection for ReverieAgentConnection {
             ) {
                 let session_id_str = session_id.0.as_ref().to_string();
                 let _ = http_client
-                    .save_passive(
+                    .save_observation(
                         &session_id_str,
+                        "user prompt",
                         &original_prompt,
                         "zed-agent-user-intent",
                     )
                     .await;
                 let _ = http_client
-                    .save_passive(&session_id_str, &summary, "zed-agent-run-summary")
+                    .save_observation(
+                        &session_id_str,
+                        "run summary",
+                        &summary,
+                        "zed-agent-run-summary",
+                    )
                     .await;
             }
 

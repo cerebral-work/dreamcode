@@ -151,9 +151,10 @@ mod http_tests {
 
     #[test]
     fn smart_context_returns_none_on_transport_error() {
-        let http = FakeHttpClient::create(|_req| async move {
-            Err(anyhow::anyhow!("connection refused"))
-        });
+        let http =
+            FakeHttpClient::create(
+                |_req| async move { Err(anyhow::anyhow!("connection refused")) },
+            );
         let client = ReverieHttpClient::new(
             Some("http://example.test".to_string()),
             "p".to_string(),
@@ -198,23 +199,20 @@ mod http_tests {
     }
 
     #[test]
-    fn save_passive_serializes_correct_body() {
-        let captured: StdArc<Mutex<Option<String>>> = StdArc::new(Mutex::new(None));
+    fn save_observation_serializes_correct_body() {
+        let captured: StdArc<Mutex<Option<(String, String)>>> = StdArc::new(Mutex::new(None));
         let captured_for_handler = captured.clone();
         let http = FakeHttpClient::create(move |mut req| {
             let captured_for_handler = captured_for_handler.clone();
             async move {
                 assert_eq!(req.method(), Method::POST);
-                assert!(req.uri().to_string().contains("/observations/passive"));
+                let uri = req.uri().to_string();
                 let mut body = String::new();
-                req.body_mut()
-                    .read_to_string(&mut body)
-                    .await
-                    .unwrap();
-                *captured_for_handler.lock().unwrap() = Some(body);
+                req.body_mut().read_to_string(&mut body).await.unwrap();
+                *captured_for_handler.lock().unwrap() = Some((uri, body));
                 Ok(Response::builder()
-                    .status(200)
-                    .body(AsyncBody::from(r#"{"saved":1}"#.to_string()))
+                    .status(201)
+                    .body(AsyncBody::from(r#"{"id":1,"status":"saved"}"#.to_string()))
                     .unwrap())
             }
         });
@@ -224,39 +222,50 @@ mod http_tests {
             "myproj".to_string(),
             http,
         );
-        block_on(client.save_passive(
+        block_on(client.save_observation(
             "session-42",
+            "user prompt",
             "hello world",
             "zed-agent-user-intent",
         ))
         .unwrap();
 
-        let body = captured.lock().unwrap().clone().expect("body captured");
+        let (uri, body) = captured.lock().unwrap().clone().expect("body captured");
+        // Direct-add endpoint, not /observations/passive — extractor-free path
+        // so raw prompt/summary text actually lands.
+        assert!(uri.ends_with("/observations"), "{uri}");
+        assert!(!uri.contains("/observations/passive"), "{uri}");
         assert!(body.contains(r#""session_id":"session-42""#), "{body}");
+        assert!(body.contains(r#""type":"note""#), "{body}");
+        assert!(body.contains(r#""title":"user prompt""#), "{body}");
         assert!(body.contains(r#""content":"hello world""#), "{body}");
         assert!(body.contains(r#""project":"myproj""#), "{body}");
-        assert!(body.contains(r#""source":"zed-agent-user-intent""#), "{body}");
+        assert!(
+            body.contains(r#""source":"zed-agent-user-intent""#),
+            "{body}"
+        );
     }
 
     #[test]
-    fn save_passive_tolerates_transport_error() {
-        let http = FakeHttpClient::create(|_req| async move {
-            Err(anyhow::anyhow!("connection refused"))
-        });
+    fn save_observation_tolerates_transport_error() {
+        let http =
+            FakeHttpClient::create(
+                |_req| async move { Err(anyhow::anyhow!("connection refused")) },
+            );
         let client = ReverieHttpClient::new(
             Some("http://example.test".to_string()),
             "p".to_string(),
             http,
         );
-        let result = block_on(client.save_passive("s", "c", "x"));
+        let result = block_on(client.save_observation("s", "t", "c", "x"));
         assert!(
             result.is_ok(),
-            "save_passive must never propagate transport errors"
+            "save_observation must never propagate transport errors"
         );
     }
 
     #[test]
-    fn save_passive_tolerates_5xx() {
+    fn save_observation_tolerates_5xx() {
         let http = FakeHttpClient::create(|_req| async move {
             Ok(Response::builder()
                 .status(500)
@@ -268,8 +277,8 @@ mod http_tests {
             "p".to_string(),
             http,
         );
-        let result = block_on(client.save_passive("s", "c", "x"));
-        assert!(result.is_ok(), "save_passive must swallow 5xx quietly");
+        let result = block_on(client.save_observation("s", "t", "c", "x"));
+        assert!(result.is_ok(), "save_observation must swallow 5xx quietly");
     }
 }
 
@@ -351,7 +360,10 @@ mod session_slot_tests {
             let (_run, _todos, _guard) = acquire_run_slot(&state_for_panic).unwrap();
             panic!("simulated failure while holding the slot");
         }));
-        assert!(result.is_err(), "the panic should propagate out of catch_unwind");
+        assert!(
+            result.is_err(),
+            "the panic should propagate out of catch_unwind"
+        );
         assert!(
             !state.lock().in_progress,
             "in_progress must be cleared even when the guard is dropped via panic"
@@ -378,13 +390,12 @@ mod augment_tests {
     #[test]
     fn augment_prompt_blocks_prepends_memory_when_present() {
         let blocks = vec![text_block("hello")];
-        let memory = Some(SmartContext { content: "- item 1".into() });
+        let memory = Some(SmartContext {
+            content: "- item 1".into(),
+        });
         let out = augment_prompt_blocks(blocks, memory);
         assert_eq!(out.len(), 2);
-        assert_eq!(
-            block_text(&out[0]).unwrap(),
-            "Relevant memory:\n- item 1\n"
-        );
+        assert_eq!(block_text(&out[0]).unwrap(), "Relevant memory:\n- item 1\n");
         assert_eq!(block_text(&out[1]).unwrap(), "hello");
     }
 
@@ -399,7 +410,9 @@ mod augment_tests {
     #[test]
     fn augment_prompt_blocks_skips_empty_memory() {
         let blocks = vec![text_block("hello")];
-        let memory = Some(SmartContext { content: "   \n".into() });
+        let memory = Some(SmartContext {
+            content: "   \n".into(),
+        });
         let out = augment_prompt_blocks(blocks, memory);
         assert_eq!(out.len(), 1, "whitespace-only memory should be skipped");
         assert_eq!(block_text(&out[0]).unwrap(), "hello");
@@ -430,11 +443,8 @@ mod cancel_race_tests {
     fn race_with_cancel_lets_work_win_when_no_signal() {
         let (_tx, rx) = smol::channel::bounded::<()>(1);
 
-        let result: anyhow::Result<u32> = futures::executor::block_on(race_with_cancel(
-            async { Ok(42u32) },
-            &rx,
-            "cancelled",
-        ));
+        let result: anyhow::Result<u32> =
+            futures::executor::block_on(race_with_cancel(async { Ok(42u32) }, &rx, "cancelled"));
         assert_eq!(result.unwrap(), 42);
     }
 }

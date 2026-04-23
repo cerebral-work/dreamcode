@@ -1296,6 +1296,16 @@ impl AcpThread {
         &self.connection
     }
 
+    /// Replace the `AgentConnection` this thread dispatches prompts through.
+    /// Used by decorator wrappers (e.g. the Reverie memory augment) that
+    /// need to intercept `prompt()` but receive an AcpThread constructed by
+    /// an inner agent holding a direct-to-self connection. Without this,
+    /// `new_session` delegation installs the inner connection and the
+    /// wrapper never sees prompt traffic.
+    pub fn set_connection(&mut self, connection: Rc<dyn AgentConnection>) {
+        self.connection = connection;
+    }
+
     pub fn action_log(&self) -> &Entity<ActionLog> {
         &self.action_log
     }
