@@ -274,6 +274,18 @@ integration.
 - **Detail view for a single event**: click a row → shows full `fields`
   payload in a side sheet. Deferred; one-liner is enough for v1.
 - **Export / copy**: not in v1.
+- **Toggling a category ON doesn't retroactively include past events**: because
+  the server-side `categories=` filter is lossy — once the cursor has advanced
+  past events that were filtered out server-side, those events are gone from
+  the client's perspective. Observed during smoke: toggling `tx` ON didn't
+  reveal an already-seeded `tx.commit` row; a freshly-seeded one did appear.
+  Workable fix options for v1.1: (a) stop passing `categories=` to the server
+  and filter purely client-side, (b) reset the client cursor when the filter
+  set expands, (c) keep per-category cursors. (a) is simplest and matches the
+  spec's "client-side filtering applies to already-buffered events" intent.
+- **Filter-state persistence to Zed settings**: the spec promised
+  `agent.reverie.dream_inspector.categories` persistence but v1 ships with
+  ephemeral per-session filter state. Add in v1.1.
 
 ## Repositories touched
 
