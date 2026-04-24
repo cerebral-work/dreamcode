@@ -1050,7 +1050,7 @@ impl AgentPanel {
             // the inline assistant etc.
             store.request_connection(
                 Agent::NativeAgent,
-                Agent::NativeAgent.server(fs.clone(), thread_store.clone()),
+                Agent::NativeAgent.server(fs.clone(), thread_store.clone(), &project, cx),
                 cx,
             );
             store
@@ -1556,6 +1556,8 @@ impl AgentPanel {
     fn has_history_for_selected_agent(&self, cx: &App) -> bool {
         match &self.selected_agent {
             Agent::NativeAgent => true,
+            // Reverie runs one ephemeral planner per prompt; no history yet.
+            Agent::ReverieAgent => false,
             Agent::Custom { .. } => self
                 .connection_store
                 .read(cx)
@@ -2678,7 +2680,14 @@ impl AgentPanel {
         .detach();
 
         let server = server_override
-            .unwrap_or_else(|| agent.server(self.fs.clone(), self.thread_store.clone()));
+            .unwrap_or_else(|| {
+                agent.server(
+                    self.fs.clone(),
+                    self.thread_store.clone(),
+                    &self.project,
+                    cx,
+                )
+            });
         let thread_store = server
             .clone()
             .downcast::<agent::NativeAgentServer>()
@@ -3350,6 +3359,38 @@ impl AgentPanel {
                                                 {
                                                     panel.update(cx, |panel, cx| {
                                                         panel.selected_agent = Agent::NativeAgent;
+                                                        let id = panel.create_thread(
+                                                            "agent_panel",
+                                                            window,
+                                                            cx,
+                                                        );
+                                                        panel.activate_retained_thread(
+                                                            id, true, window, cx,
+                                                        );
+                                                    });
+                                                }
+                                            });
+                                        }
+                                    }
+                                }),
+                        )
+                        .item(
+                            ContextMenuEntry::new("Reverie")
+                                .when(is_agent_selected(Agent::ReverieAgent), |this| {
+                                    this.action(Box::new(NewExternalAgentThread { agent: None }))
+                                })
+                                .icon(IconName::ZedAgent)
+                                .icon_color(Color::Muted)
+                                .handler({
+                                    let workspace = workspace.clone();
+                                    move |window, cx| {
+                                        if let Some(workspace) = workspace.upgrade() {
+                                            workspace.update(cx, |workspace, cx| {
+                                                if let Some(panel) =
+                                                    workspace.panel::<AgentPanel>(cx)
+                                                {
+                                                    panel.update(cx, |panel, cx| {
+                                                        panel.selected_agent = Agent::ReverieAgent;
                                                         let id = panel.create_thread(
                                                             "agent_panel",
                                                             window,

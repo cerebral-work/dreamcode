@@ -1,0 +1,44 @@
+[package]
+name = "reverie_agent"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/reverie_agent.rs"
+doctest = false
+
+[dependencies]
+acp_thread.workspace = true
+action_log.workspace = true
+agent-client-protocol.workspace = true
+agent_servers.workspace = true
+anyhow.workspace = true
+collections.workspace = true
+futures.workspace = true
+fs.workspace = true
+gpui.workspace = true
+language_model.workspace = true
+log.workspace = true
+http_client.workspace = true
+parking_lot.workspace = true
+paths.workspace = true
+project.workspace = true
+reverie-deepagent.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+settings.workspace = true
+smol.workspace = true
+task.workspace = true
+ui.workspace = true
+util.workspace = true
+uuid.workspace = true
+watch.workspace = true
+
+[dev-dependencies]
+http_client = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true

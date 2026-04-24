@@ -53,6 +53,7 @@ members = [
     "crates/denoise",
     "crates/dev_container",
     "crates/diagnostics",
+    "crates/dream_inspector",
     "crates/docs_preprocessor",
     "crates/edit_prediction",
     "crates/edit_prediction_cli",
@@ -166,6 +167,7 @@ members = [
     "crates/remote_server",
     "crates/repl",
     "crates/reqwest_client",
+    "crates/reverie_agent",
     "crates/rope",
     "crates/rpc",
     "crates/rules_library",
@@ -318,6 +320,7 @@ derive_refineable = { path = "crates/refineable/derive_refineable" }
 dev_container = { path = "crates/dev_container" }
 diagnostics = { path = "crates/diagnostics" }
 dialoguer = { version = "0.12", default-features = false }
+dream_inspector = { path = "crates/dream_inspector" }
 editor = { path = "crates/editor" }
 encoding_selector = { path = "crates/encoding_selector" }
 env_var = { path = "crates/env_var" }
@@ -423,6 +426,7 @@ remote_connection = { path = "crates/remote_connection" }
 remote_server = { path = "crates/remote_server" }
 repl = { path = "crates/repl" }
 reqwest_client = { path = "crates/reqwest_client" }
+reverie_agent = { path = "crates/reverie_agent" }
 rodio = { git = "https://github.com/RustAudio/rodio", rev = "e50e726ddd0292f6ef9de0dda6b90af4ed1fb66a", features = ["wav", "playback", "wav_output", "recording"] }
 rope = { path = "crates/rope" }
 rpc = { path = "crates/rpc" }
@@ -695,6 +699,7 @@ reqwest = { git = "https://github.com/zed-industries/reqwest.git", rev = "c15662
     "socks",
     "stream",
 ], package = "zed-reqwest", version = "0.12.15-zed" }
+reverie-deepagent = { path = "../../../reverie/crates/reverie-deepagent" }
 rsa = "0.9.6"
 runtimelib = { version = "1.4.0", default-features = false, features = [
     "async-dispatcher-runtime", "aws-lc-rs"

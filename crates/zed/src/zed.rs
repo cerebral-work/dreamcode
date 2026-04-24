@@ -76,6 +76,7 @@ use std::{
     sync::atomic::{self, AtomicBool},
 };
 use terminal_view::terminal_panel::{self, TerminalPanel};
+use dream_inspector::DreamInspectorPanel;
 use theme::{ActiveTheme, SystemAppearance, ThemeRegistry, deserialize_icon_theme};
 use theme_settings::{ThemeSettings, load_user_theme};
 use ui::{Navigable, NavigableEntry, PopoverMenuHandle, TintColor, prelude::*};
@@ -697,6 +698,8 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
         let project_panel = ProjectPanel::load(workspace_handle.clone(), cx.clone());
         let outline_panel = OutlinePanel::load(workspace_handle.clone(), cx.clone());
         let terminal_panel = TerminalPanel::load(workspace_handle.clone(), cx.clone());
+        let dream_inspector_panel =
+            DreamInspectorPanel::load(workspace_handle.clone(), cx.clone());
         let git_panel = GitPanel::load(workspace_handle.clone(), cx.clone());
         let channels_panel =
             collab_ui::collab_panel::CollabPanel::load(workspace_handle.clone(), cx.clone());
@@ -721,6 +724,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             add_panel_when_ready(project_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(dream_inspector_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(channels_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
@@ -1122,6 +1126,14 @@ fn register_actions(
              window: &mut Window,
              cx: &mut Context<Workspace>| {
                 workspace.toggle_panel_focus::<TerminalPanel>(window, cx);
+            },
+        )
+        .register_action(
+            |workspace: &mut Workspace,
+             _: &dream_inspector::panel::Toggle,
+             window: &mut Window,
+             cx: &mut Context<Workspace>| {
+                workspace.toggle_panel_focus::<DreamInspectorPanel>(window, cx);
             },
         )
         .register_action({

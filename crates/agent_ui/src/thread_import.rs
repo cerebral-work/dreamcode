@@ -491,7 +491,9 @@ fn find_threads_to_import(
 
         for agent_id in agent_ids.clone() {
             let agent = Agent::from(agent_id.clone());
-            let server = agent.server(<dyn Fs>::global(cx), ThreadStore::global(cx));
+            // Thread import doesn't have a Project handle in scope; skip
+            // reverie memory augmentation for this path.
+            let server = agent.server_without_augment(<dyn Fs>::global(cx), ThreadStore::global(cx));
             let entry = store.update(cx, |store, cx| store.request_connection(agent, server, cx));
 
             wait_for_connection_tasks.push(entry.read(cx).wait_for_connection().map({

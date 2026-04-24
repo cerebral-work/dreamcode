@@ -796,8 +796,14 @@ impl ThreadsArchiveView {
         let fs = <dyn Fs>::global(cx);
 
         let task = agent_connection_store.update(cx, |store, cx| {
+            // Thread archive rehydration doesn't easily surface a Project
+            // handle; skip reverie memory augmentation for this path.
             store
-                .request_connection(agent.clone(), agent.server(fs, ThreadStore::global(cx)), cx)
+                .request_connection(
+                    agent.clone(),
+                    agent.server_without_augment(fs, ThreadStore::global(cx)),
+                    cx,
+                )
                 .read(cx)
                 .wait_for_connection()
         });

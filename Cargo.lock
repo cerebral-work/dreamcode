@@ -389,6 +389,7 @@ dependencies = [
  "remote_connection",
  "remote_server",
  "reqwest_client",
+ "reverie_agent",
  "rope",
  "rules_library",
  "schemars",
@@ -5075,6 +5076,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "dream_inspector"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "collections",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "log",
+ "parking_lot",
+ "project",
+ "serde",
+ "serde_json",
+ "settings",
+ "smol",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "dtoa"
 version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8483,6 +8505,7 @@ dependencies = [
  "tokio",
  "tokio-rustls 0.26.2",
  "tower-service",
+ "webpki-roots 1.0.7",
 ]
 
 [[package]]
@@ -14731,6 +14754,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "webpki-roots 1.0.7",
 ]
 
 [[package]]
@@ -14765,6 +14789,50 @@ dependencies = [
  "tiny-skia",
  "usvg",
  "zune-jpeg 0.4.21",
+]
+
+[[package]]
+name = "reverie-deepagent"
+version = "0.9.7"
+dependencies = [
+ "reqwest 0.12.24",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "reverie_agent"
+version = "0.1.0"
+dependencies = [
+ "acp_thread",
+ "action_log",
+ "agent-client-protocol",
+ "agent_servers",
+ "anyhow",
+ "collections",
+ "fs",
+ "futures 0.3.32",
+ "gpui",
+ "http_client",
+ "language_model",
+ "log",
+ "parking_lot",
+ "paths",
+ "project",
+ "reverie-deepagent",
+ "serde",
+ "serde_json",
+ "settings",
+ "smol",
+ "task",
+ "tempfile",
+ "ui",
+ "util",
+ "uuid",
+ "watch",
 ]
 
 [[package]]
@@ -16595,7 +16663,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "webpki-roots",
+ "webpki-roots 0.26.8",
 ]
 
 [[package]]
@@ -20301,6 +20369,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "webpki-roots"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52f5ee44c96cf55f1b349600768e3ece3a8f26010c05265ab73f945bb1a2eb9d"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "webrtc-sys"
 version = "0.3.23"
 source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1#147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1"
@@ -22089,7 +22166,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots",
+ "webpki-roots 0.26.8",
 ]
 
 [[package]]
@@ -22264,6 +22341,7 @@ dependencies = [
  "debugger_ui",
  "dev_container",
  "diagnostics",
+ "dream_inspector",
  "edit_prediction",
  "edit_prediction_ui",
  "editor",
