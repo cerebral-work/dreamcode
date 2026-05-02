@@ -274,18 +274,21 @@ integration.
 - **Detail view for a single event**: click a row → shows full `fields`
   payload in a side sheet. Deferred; one-liner is enough for v1.
 - **Export / copy**: not in v1.
-- **Toggling a category ON doesn't retroactively include past events**: because
-  the server-side `categories=` filter is lossy — once the cursor has advanced
-  past events that were filtered out server-side, those events are gone from
-  the client's perspective. Observed during smoke: toggling `tx` ON didn't
-  reveal an already-seeded `tx.commit` row; a freshly-seeded one did appear.
-  Workable fix options for v1.1: (a) stop passing `categories=` to the server
-  and filter purely client-side, (b) reset the client cursor when the filter
-  set expands, (c) keep per-category cursors. (a) is simplest and matches the
-  spec's "client-side filtering applies to already-buffered events" intent.
 - **Filter-state persistence to Zed settings**: the spec promised
   `agent.reverie.dream_inspector.categories` persistence but v1 ships with
   ephemeral per-session filter state. Add in v1.1.
+
+### Resolved
+
+- **Toggling a category ON didn't retroactively include past events** (smoke
+  finding): the server-side `categories=` filter was lossy under the monotonic
+  cursor — once the cursor advanced past an event that had been filtered out
+  server-side, that event was gone from the client's perspective. Fixed by
+  option (a) above: `DreamHttpClient::recent` no longer accepts a categories
+  parameter, the request URL no longer includes `&categories=`, and all
+  filtering happens in `FeedModel::visible` against the in-memory ring buffer.
+  Toggling a category ON now exposes any buffered event of that category
+  immediately. Regression test: `feed::tests::toggling_category_on_reveals_previously_buffered_events`.
 
 ## Repositories touched
 

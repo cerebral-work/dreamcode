@@ -69,15 +69,6 @@ impl CategoryFilter {
         }
     }
 
-    /// Serialize to the comma-separated `categories=` query-string form
-    /// used by `GET /events/recent`.
-    pub fn as_query(&self) -> String {
-        let mut names: Vec<&'static str> =
-            self.enabled.iter().map(|c| c.wire_name()).collect();
-        names.sort();
-        names.join(",")
-    }
-
     pub fn enabled_set(&self) -> &HashSet<Category> {
         &self.enabled
     }
@@ -104,14 +95,6 @@ mod tests {
         assert!(f.is_enabled(Category::Tx));
         f.toggle(Category::Tx);
         assert!(!f.is_enabled(Category::Tx));
-    }
-
-    #[test]
-    fn as_query_is_stable_alpha() {
-        let mut f = CategoryFilter::default();
-        f.toggle(Category::Coord);
-        // memory-io + dream + coord → sorted: coord,dream,memory-io
-        assert_eq!(f.as_query(), "coord,dream,memory-io");
     }
 
     #[test]

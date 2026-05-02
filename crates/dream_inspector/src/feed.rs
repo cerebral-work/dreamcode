@@ -132,14 +132,9 @@ impl FeedModel {
             loop {
                 cx.background_executor().timer(interval).await;
 
-                let Ok((http, after, cats, paused)) = this.read_with(cx, |m, _| {
-                    (
-                        m.http.clone(),
-                        m.cursor.clone(),
-                        m.categories.as_query(),
-                        m.paused,
-                    )
-                }) else {
+                let Ok((http, after, paused)) =
+                    this.read_with(cx, |m, _| (m.http.clone(), m.cursor.clone(), m.paused))
+                else {
                     return; // entity gone
                 };
 
@@ -148,7 +143,7 @@ impl FeedModel {
                     continue;
                 }
 
-                let result = http.recent(after.as_deref(), 100, &cats).await;
+                let result = http.recent(after.as_deref(), 100).await;
                 let new_interval = match &result {
                     Ok(resp) if !resp.events.is_empty() => Duration::from_millis(1_000),
                     _ => Duration::from_millis(3_000),
@@ -159,16 +154,10 @@ impl FeedModel {
                             m.push_batch(resp.events, resp.next_after, cx);
                         }
                         Err(ClientError::Transport) => {
-                            m.set_error(
-                                "reverie daemon unreachable — retrying".to_string(),
-                                cx,
-                            );
+                            m.set_error("reverie daemon unreachable — retrying".to_string(), cx);
                         }
                         Err(ClientError::Status(n)) => {
-                            m.set_error(
-                                format!("reverie returned HTTP {n} — retrying"),
-                                cx,
-                            );
+                            m.set_error(format!("reverie returned HTTP {n} — retrying"), cx);
                         }
                     })
                     .is_err()
@@ -255,6 +244,42 @@ mod tests {
             assert!(m.visible().is_empty());
             m.toggle_category(Category::Tx, cx);
             assert_eq!(m.visible().len(), 1);
+        });
+    }
+
+    // Regression: when the server-side `categories=` filter was active,
+    // toggling a category ON didn't reveal events that the cursor had
+    // already advanced past. Now that filtering is purely client-side,
+    // toggling exposes any buffered event of that category.
+    #[gpui::test]
+    fn toggling_category_on_reveals_previously_buffered_events(cx: &mut TestAppContext) {
+        let http = fake_client();
+        let feed = cx.new(|_| FeedModel::new(http));
+        feed.update(cx, |m, cx| {
+            // Simulate a poll that buffered events from a category that's
+            // OFF by default (Tx). Pre-fix, these would have been filtered
+            // out at the server and never reached the buffer.
+            m.push_batch(
+                vec![
+                    ev("1-0", "memory-io", "obs.capture"),
+                    ev("2-0", "tx", "tx.commit"),
+                    ev("3-0", "tx", "tx.abort"),
+                ],
+                Some("3-0".into()),
+                cx,
+            );
+            // Default filter excludes Tx → only memory-io visible.
+            let visible_ids: Vec<_> = m.visible().iter().map(|e| e.id.clone()).collect();
+            assert_eq!(visible_ids, vec!["1-0".to_string()]);
+
+            // User toggles Tx ON. Both buffered Tx events should appear
+            // immediately, no new poll required.
+            m.toggle_category(Category::Tx, cx);
+            let visible_ids: Vec<_> = m.visible().iter().map(|e| e.id.clone()).collect();
+            assert_eq!(
+                visible_ids,
+                vec!["1-0".to_string(), "2-0".to_string(), "3-0".to_string()]
+            );
         });
     }
 }
