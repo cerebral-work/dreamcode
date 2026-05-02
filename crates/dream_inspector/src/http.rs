@@ -65,20 +65,20 @@ impl DreamHttpClient {
         self.first_fail_logged.store(false, Ordering::SeqCst);
     }
 
+    // Always fetches all categories. Category filtering happens client-side
+    // in `FeedModel::visible` so that toggling a category ON exposes already-
+    // buffered events of that category — the server-side `categories=` filter
+    // was lossy under a monotonic cursor and dropped past events permanently.
     pub async fn recent(
         &self,
         after: Option<&str>,
         limit: usize,
-        categories_csv: &str,
     ) -> Result<RecentResponse, ClientError> {
         let mut uri = format!("{}/events/recent?limit={limit}", self.base_url);
         if let Some(a) = after
             && !a.is_empty()
         {
             uri.push_str(&format!("&after={}", urlencoding(a)));
-        }
-        if !categories_csv.is_empty() {
-            uri.push_str(&format!("&categories={}", urlencoding(categories_csv)));
         }
 
         let mut response = match self.http.get(&uri, AsyncBody::empty(), false).await {
@@ -154,13 +154,16 @@ mod tests {
             }
         });
         let client = DreamHttpClient::new(Some("http://example.test".into()), http);
-        block_on(client.recent(Some("1-0"), 50, "memory-io,dream")).unwrap();
+        block_on(client.recent(Some("1-0"), 50)).unwrap();
 
         let uri = captured.lock().unwrap().clone().unwrap();
         assert!(uri.contains("/events/recent"), "{uri}");
         assert!(uri.contains("limit=50"), "{uri}");
         assert!(uri.contains("after=1-0"), "{uri}");
-        assert!(uri.contains("categories=memory-io,dream"), "{uri}");
+        assert!(
+            !uri.contains("categories="),
+            "categories filter must be client-side: {uri}"
+        );
     }
 
     #[test]
@@ -174,7 +177,7 @@ mod tests {
                 .unwrap())
         });
         let client = DreamHttpClient::new(Some("http://example.test".into()), http);
-        let r = block_on(client.recent(None, 10, "")).unwrap();
+        let r = block_on(client.recent(None, 10)).unwrap();
         assert_eq!(r.events.len(), 1);
         assert_eq!(r.events[0].type_, "obs.capture");
         assert_eq!(r.next_after.as_deref(), Some("1-0"));
@@ -182,11 +185,12 @@ mod tests {
 
     #[test]
     fn recent_returns_transport_error_on_connection_failure() {
-        let http = FakeHttpClient::create(|_req| async move {
-            Err(anyhow::anyhow!("connection refused"))
-        });
+        let http =
+            FakeHttpClient::create(
+                |_req| async move { Err(anyhow::anyhow!("connection refused")) },
+            );
         let client = DreamHttpClient::new(Some("http://example.test".into()), http);
-        let r = block_on(client.recent(None, 10, ""));
+        let r = block_on(client.recent(None, 10));
         assert!(matches!(r, Err(ClientError::Transport)));
     }
 
@@ -199,7 +203,7 @@ mod tests {
                 .unwrap())
         });
         let client = DreamHttpClient::new(Some("http://example.test".into()), http);
-        let r = block_on(client.recent(None, 10, ""));
+        let r = block_on(client.recent(None, 10));
         assert!(matches!(r, Err(ClientError::Status(503))));
     }
 }

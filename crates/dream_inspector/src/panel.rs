@@ -47,11 +47,7 @@ impl Focusable for DreamInspectorPanel {
 }
 
 impl DreamInspectorPanel {
-    pub fn new(
-        workspace: &Workspace,
-        _project: Entity<Project>,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(workspace: &Workspace, _project: Entity<Project>, cx: &mut Context<Self>) -> Self {
         let http_client = workspace.project().read(cx).client().http_client();
         let base_url = std::env::var("REVERIE_URL").ok();
         let dream_http = DreamHttpClient::new(base_url, http_client);
@@ -81,7 +77,11 @@ impl DreamInspectorPanel {
                 let feed = feed.clone();
                 Button::new(c.display_name(), c.display_name())
                     .label_size(LabelSize::Small)
-                    .color(if enabled { Color::Success } else { Color::Muted })
+                    .color(if enabled {
+                        Color::Success
+                    } else {
+                        Color::Muted
+                    })
                     .on_click(move |_, _, cx| {
                         feed.update(cx, |m, cx| m.toggle_category(c, cx));
                     })
@@ -97,7 +97,11 @@ impl DreamInspectorPanel {
             .child(
                 IconButton::new(
                     "dream-pause",
-                    if paused { IconName::PlayFilled } else { IconName::DebugPause },
+                    if paused {
+                        IconName::PlayFilled
+                    } else {
+                        IconName::DebugPause
+                    },
                 )
                 .tooltip(Tooltip::text("Pause polling"))
                 .on_click(move |_, _, cx| {
@@ -108,13 +112,7 @@ impl DreamInspectorPanel {
     }
 
     fn render_feed(&self, cx: &Context<Self>) -> AnyElement {
-        let snap: Vec<_> = self
-            .feed
-            .read(cx)
-            .visible()
-            .into_iter()
-            .cloned()
-            .collect();
+        let snap: Vec<_> = self.feed.read(cx).visible().into_iter().cloned().collect();
         let count = snap.len();
         if count == 0 {
             return div()
@@ -124,34 +122,30 @@ impl DreamInspectorPanel {
                 .child(Label::new("Waiting for events…").color(Color::Muted))
                 .into_any_element();
         }
-        uniform_list(
-            "dream-feed",
-            count,
-            move |range, _window, _cx| {
-                range
-                    .map(|i| {
-                        let ev = &snap[i];
-                        h_flex()
-                            .gap_3()
-                            .child(
-                                Label::new(format_time(ev.ts_ms))
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
-                            )
-                            .child(
-                                Label::new(SharedString::from(ev.type_.clone()))
-                                    .size(LabelSize::Small)
-                                    .color(color_for_category(&ev.category)),
-                            )
-                            .child(
-                                Label::new(SharedString::from(ev.summary.clone()))
-                                    .size(LabelSize::Small),
-                            )
-                            .into_any_element()
-                    })
-                    .collect()
-            },
-        )
+        uniform_list("dream-feed", count, move |range, _window, _cx| {
+            range
+                .map(|i| {
+                    let ev = &snap[i];
+                    h_flex()
+                        .gap_3()
+                        .child(
+                            Label::new(format_time(ev.ts_ms))
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .child(
+                            Label::new(SharedString::from(ev.type_.clone()))
+                                .size(LabelSize::Small)
+                                .color(color_for_category(&ev.category)),
+                        )
+                        .child(
+                            Label::new(SharedString::from(ev.summary.clone()))
+                                .size(LabelSize::Small),
+                        )
+                        .into_any_element()
+                })
+                .collect()
+        })
         .flex_1()
         .into_any_element()
     }
