@@ -15,8 +15,8 @@ use gpui::{
 };
 use project::Project;
 use ui::{
-    Button, Color, Divider, Icon, IconButton, IconName, IconSize, Label, LabelSize, Tooltip,
-    h_flex, prelude::*, v_flex,
+    Button, Color, Divider, IconButton, IconName, Label, LabelSize, Tooltip, h_flex, prelude::*,
+    v_flex,
 };
 use workspace::Workspace;
 use workspace::dock::{DockPosition, Panel, PanelEvent};
@@ -34,6 +34,7 @@ pub const PANEL_KEY: &str = "DreamInspectorPanel";
 pub struct DreamInspectorPanel {
     feed: Entity<FeedModel>,
     focus_handle: FocusHandle,
+    #[allow(dead_code)]
     follow: bool,
     _subscriptions: Vec<Subscription>,
 }
