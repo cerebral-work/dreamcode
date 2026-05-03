@@ -1,4 +1,4 @@
-use agent_client_protocol as acp;
+use agent_client_protocol::schema as acp;
 use reverie_deepagent::{NextAction, PlannerObserver, SpawnObservation};
 use smol::channel::Sender;
 use std::sync::Arc;

@@ -3017,14 +3017,12 @@ impl AgentPanel {
                                                     workspace.panel::<AgentPanel>(cx)
                                                 {
                                                     panel.update(cx, |panel, cx| {
-                                                        panel.selected_agent = Agent::ReverieAgent;
-                                                        let id = panel.create_thread(
-                                                            "agent_panel",
+                                                        panel.new_external_agent_thread(
+                                                            &NewExternalAgentThread {
+                                                                agent: Some(Agent::ReverieAgent),
+                                                            },
                                                             window,
                                                             cx,
-                                                        );
-                                                        panel.activate_retained_thread(
-                                                            id, true, window, cx,
                                                         );
                                                     });
                                                 }
