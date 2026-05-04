@@ -252,8 +252,17 @@ impl LanguageModelProvider for CloudLanguageModelProvider {
         !state.is_signed_out(cx)
     }
 
-    fn authenticate(&self, _cx: &mut App) -> Task<Result<(), AuthenticateError>> {
-        Task::ready(Ok(()))
+    fn authenticate(&self, cx: &mut App) -> Task<Result<(), AuthenticateError>> {
+        let mut status = self.state.read(cx).client.status();
+        if !status.borrow().is_signing_in() {
+            return Task::ready(Ok(()));
+        }
+        cx.background_spawn(async move {
+            while status.borrow().is_signing_in() {
+                status.next().await;
+            }
+            Ok(())
+        })
     }
 
     fn configuration_view(

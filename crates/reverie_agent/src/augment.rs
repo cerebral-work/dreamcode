@@ -3,7 +3,7 @@ use acp_thread::{
     AgentSessionModes, AgentSessionRetry, AgentSessionSetTitle, AgentSessionTruncate,
     AgentTelemetry, UserMessageId,
 };
-use agent_client_protocol::{self as acp};
+use agent_client_protocol::schema::{self as acp};
 use anyhow::Result;
 use gpui::{App, Entity, SharedString, Task};
 use project::{AgentId, Project};

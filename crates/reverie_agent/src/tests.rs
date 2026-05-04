@@ -283,7 +283,7 @@ mod http_tests {
 }
 
 mod session_slot_tests {
-    use crate::connection::{InProgressGuard, SessionState, acquire_run_slot};
+    use crate::connection::{SessionState, acquire_run_slot};
     use parking_lot::Mutex;
     use reverie_deepagent::{Run, TodoList};
     use std::sync::Arc;
@@ -374,7 +374,7 @@ mod session_slot_tests {
 mod augment_tests {
     use crate::augment::augment_prompt_blocks;
     use crate::http::SmartContext;
-    use agent_client_protocol as acp;
+    use agent_client_protocol::schema as acp;
 
     fn text_block(s: &str) -> acp::ContentBlock {
         acp::ContentBlock::Text(acp::TextContent::new(s.to_string()))

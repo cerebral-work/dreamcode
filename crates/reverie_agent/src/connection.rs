@@ -1,6 +1,6 @@
 use acp_thread::{AcpThread, AgentConnection, UserMessageId};
 use action_log::ActionLog;
-use agent_client_protocol as acp;
+use agent_client_protocol::schema as acp;
 use anyhow::{Context as _, Result, anyhow};
 use collections::HashMap;
 use futures::StreamExt as _;
