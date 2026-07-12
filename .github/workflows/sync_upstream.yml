@@ -135,6 +135,9 @@ jobs:
         if: steps.merge.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.SYNC_PAT || secrets.GITHUB_TOKEN }}
+          # Pin gh to this fork — otherwise gh defaults base repo to the parent
+          # (zed-industries/zed) and pr list/create/edit target the wrong repo.
+          GH_REPO: ${{ github.repository }}
           BEHIND: ${{ steps.merge.outputs.behind }}
           CONFLICTS: ${{ steps.merge.outputs.conflicts }}
           REMAINING: ${{ steps.merge.outputs.remaining }}
