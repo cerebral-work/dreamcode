@@ -1,6 +1,6 @@
 use std::{collections::HashSet, fmt::Display, rc::Rc, sync::Arc};
 
-use agent_client_protocol::schema as acp;
+use agent_client_protocol::schema::v1 as acp;
 use agent_servers::{AcpDebugMessage, AcpDebugMessageContent, AcpDebugMessageDirection};
 use agent_ui::agent_connection_store::AgentConnectionStatus;
 use agent_ui::{Agent, AgentConnectionStore, AgentPanel};
@@ -509,6 +509,7 @@ impl AcpTools {
                                     } else {
                                         CopyButtonVisibility::Hidden
                                     },
+                                    wrap_button_visibility: markdown::WrapButtonVisibility::Hidden,
                                     border: false,
                                 },
                             ),
@@ -767,7 +768,7 @@ impl Render for AcpTools {
                     } else {
                         div()
                             .size_full()
-                            .flex_grow()
+                            .flex_grow_1()
                             .child(
                                 list(
                                     connection.list_state.clone(),
