@@ -1,0 +1,207 @@
+# Sync Upstream Zed
+#
+# Monthly merge of the latest stable zed-industries/zed release tag (the newest
+# `v*` tag excluding pre/rc/nightly) into this fork. Because the fork carries
+# divergent commits (new crates, Cerebral themes), this can NOT be a
+# fast-forward — it merges the tag into a stable `sync/upstream` branch and
+# opens (or updates) a single PR against `main` for human review. It never
+# pushes to `main` and never auto-merges.
+#
+# Deterministic conflicts are auto-resolved so humans only touch real ones:
+#   - Upstream community/duplicate-bot workflows we deleted -> keep deleted.
+#   - Cargo.lock -> take upstream's; regenerate with `cargo` locally.
+# Any remaining conflicts are committed WITH markers so the branch stays
+# pullable, and the PR is labeled `needs-conflict-resolution`.
+#
+# Optional secret:
+#   SYNC_PAT - A fine-grained PAT with `contents: write` + `pull-requests: write`
+#              on this repo. The job works without it via GITHUB_TOKEN.
+#              NOTE: the test workflows (run_tests.yml etc.) are currently gated
+#              to the zed-industries org and are SKIPPED on this fork, so the
+#              sync PR gets no CI today regardless of token. Once fork CI is
+#              enabled, SYNC_PAT lets the sync PR trigger it (PRs authored by the
+#              default GITHUB_TOKEN are blocked from triggering workflows).
+#
+# NOTE: The first run cannot clear a large backlog on its own. Do one manual
+# catch-up merge, then this keeps the steady state cheap.
+
+name: Sync Upstream Zed
+
+on:
+  schedule:
+    - cron: "17 6 1 * *" # 1st of each month, 06:17 UTC
+  workflow_dispatch: {}
+
+# Serialize runs so overlapping syncs don't fight over the sync/upstream branch.
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM_REPO: https://github.com/zed-industries/zed
+  SYNC_BRANCH: sync/upstream
+
+jobs:
+  sync:
+    # Only run on the fork itself — not on upstream, not on forks-of-the-fork.
+    if: github.repository == 'cerebral-work/dreamcode'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Merge upstream into sync branch
+        id: merge
+        run: |
+          set -euo pipefail
+          git config user.name "cerebral-sync-bot"
+          git config user.email "sync-bot@cerebral-work.noreply.github.com"
+
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch --quiet --tags upstream
+
+          # Target the newest stable release tag (exclude pre/rc/nightly).
+          target=$(git tag -l 'v*' --sort=-v:refname | grep -viE 'pre|rc|nightly' | head -1)
+          if [ -z "$target" ]; then
+            echo "No stable upstream tag found." >&2
+            exit 1
+          fi
+          echo "Target upstream tag: ${target}"
+          echo "target=${target}" >> "$GITHUB_OUTPUT"
+
+          behind=$(git rev-list --count "main..${target}")
+          echo "Behind ${target} by ${behind} commit(s)."
+          if [ "$behind" -eq 0 ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Already up to date with ${target}."
+            exit 0
+          fi
+
+          # Start the sync branch from current main, then merge the tag in.
+          git checkout -B "$SYNC_BRANCH" main
+
+          # Merge; a conflict here is an expected state, not a failure.
+          if git merge --no-edit "$target"; then
+            echo "Clean merge."
+          else
+            echo "Merge produced conflicts — auto-resolving deterministic ones."
+          fi
+
+          # --- Deterministic resolution -------------------------------------
+          # 1. Files we intentionally deleted but upstream modified (status DU):
+          #    keep our deletion.
+          git -c core.quotepath=false status --porcelain \
+            | awk '$1=="DU"{print substr($0,4)}' \
+            | while IFS= read -r f; do
+                echo "  keep-deleted: $f"
+                git rm -q --ignore-unmatch -- "$f" || true
+              done
+
+          # 2. Cargo.lock: prefer upstream's; the build regenerates it.
+          if git status --porcelain -- Cargo.lock | grep -qE '^(UU|AA|DU|UD)'; then
+            echo "  resolve Cargo.lock -> upstream"
+            git checkout --theirs -- Cargo.lock
+            git add Cargo.lock
+          fi
+          # ------------------------------------------------------------------
+
+          remaining=$(git diff --name-only --diff-filter=U)
+          if [ -z "$remaining" ]; then
+            # Index is clean (either clean merge or fully auto-resolved).
+            # Finalize the merge commit if one is still in progress.
+            if [ -f .git/MERGE_HEAD ]; then
+              git commit --no-edit
+            fi
+            echo "conflicts=false" >> "$GITHUB_OUTPUT"
+            echo "remaining=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Remaining conflicts (left for human review):"
+            echo "$remaining" | sed 's/^/  - /'
+            # Stage conflict-markered files so the branch is a valid, pullable
+            # commit a human can resolve.
+            git add -A
+            git commit -m "WIP: merge ${target} (unresolved conflicts)"
+            {
+              echo "conflicts=true"
+              echo "remaining<<EOF"
+              echo "$remaining"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "behind=${behind}" >> "$GITHUB_OUTPUT"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+          git push --force origin "$SYNC_BRANCH"
+
+      - name: Open or update sync PR
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_PAT || secrets.GITHUB_TOKEN }}
+          # Pin gh to this fork — otherwise gh defaults base repo to the parent
+          # (zed-industries/zed) and pr list/create/edit target the wrong repo.
+          GH_REPO: ${{ github.repository }}
+          TARGET: ${{ steps.merge.outputs.target }}
+          BEHIND: ${{ steps.merge.outputs.behind }}
+          CONFLICTS: ${{ steps.merge.outputs.conflicts }}
+          REMAINING: ${{ steps.merge.outputs.remaining }}
+        run: |
+          set -euo pipefail
+
+          if [ "$CONFLICTS" = "true" ]; then
+            title="Sync upstream Zed ${TARGET} (${BEHIND} commits) — conflicts need resolution"
+            status_line="⚠️ **This branch contains unresolved conflict markers.** Pull \`${SYNC_BRANCH}\`, resolve, and push before merging."
+          else
+            title="Sync upstream Zed ${TARGET} (${BEHIND} commits)"
+            status_line="✅ Merged cleanly (deterministic conflicts auto-resolved). Build locally before merging."
+          fi
+
+          # Build the PR body via printf (no heredoc — a column-0 heredoc
+          # delimiter would terminate the YAML block scalar).
+          {
+            printf '%s\n\n' "Automated monthly sync of \`zed-industries/zed@${TARGET}\` (latest stable release tag) into this fork."
+            printf '%s\n' "- Upstream commits merged: **${BEHIND}**"
+            printf '%s\n' "- ${status_line}"
+            if [ "$CONFLICTS" = "true" ]; then
+              printf '\n### Files needing manual resolution\n\n```\n%s\n```\n' "$REMAINING"
+            fi
+            printf '\n**How to finish this PR**\n'
+            printf '1. If conflicts are listed above, resolve them on `%s` and push.\n' "$SYNC_BRANCH"
+            printf '2. Build locally: `./script/clippy` + smoke test. (Fork CI is org-gated off — see the fork-CI enablement issue.)\n'
+            printf '3. Merge into `main`.\n'
+            printf '\n_Auto-resolved by policy: community/duplicate-bot workflows kept deleted; `Cargo.lock` taken from upstream. Verify `Cargo.lock` against your custom crates if the build fails._\n'
+            printf '\n<sub>Generated by `.github/workflows/sync_upstream.yml`.</sub>\n'
+          } > "${RUNNER_TEMP:-/tmp}/pr_body.md"
+
+          body_file="${RUNNER_TEMP:-/tmp}/pr_body.md"
+
+          # Ensure the label exists before applying it.
+          gh label create needs-conflict-resolution \
+            --color B60205 --description "Sync PR has unresolved merge conflicts" \
+            2>/dev/null || true
+
+          existing=$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "Updating existing PR #${existing}."
+            gh pr edit "$existing" --title "$title" --body-file "$body_file"
+            pr_number="$existing"
+          else
+            echo "Creating new PR."
+            gh pr create --base main --head "$SYNC_BRANCH" --title "$title" --body-file "$body_file"
+            pr_number=$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number')
+          fi
+
+          if [ "$CONFLICTS" = "true" ]; then
+            gh pr edit "$pr_number" --add-label needs-conflict-resolution || true
+          else
+            gh pr edit "$pr_number" --remove-label needs-conflict-resolution 2>/dev/null || true
+          fi
